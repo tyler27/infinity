@@ -248,6 +248,11 @@ public partial class LiveEngine : Node
 			}
 		}
 
+		// Record where pattern output ends (boundary points come after)
+		int[] boundaryStartIdx = new int[ProjectorCount];
+		for (int i = 0; i < ProjectorCount; i++)
+			boundaryStartIdx[i] = _projectorPoints[i].Count;
+
 		// Append zone boundary points when enabled (treated as real laser output)
 		for (int i = 0; i < ProjectorCount; i++)
 		{
@@ -280,7 +285,7 @@ public partial class LiveEngine : Node
 			if (_projectorHasOutput[i] && _projectorPoints[i].Count > 0)
 			{
 				if (_renderers[i] != null)
-					_renderers[i].RenderFrame(_projectorPoints[i]);
+					_renderers[i].RenderFrame(_projectorPoints[i], boundaryStartIdx[i]);
 
 				SendProjectorDmx(i, _projectorPoints[i]);
 			}

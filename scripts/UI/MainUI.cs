@@ -848,7 +848,14 @@ public partial class MainUI : CanvasLayer
             AddAxisSlider(posRow, "Y", 0, 15, 4, 0.5, (val) => UpdateProjectorTransform(idx, posY: (float)val));
             AddAxisSlider(posRow, "Z", -20, 20, 0, 0.5, (val) => UpdateProjectorTransform(idx, posZ: (float)val));
 
-            // Rotation removed for now — focus on position first
+            // Rotation row: RX RY RZ (degrees)
+            var rotRow = new HBoxContainer();
+            rotRow.AddThemeConstantOverride("separation", 3);
+            vbox.AddChild(rotRow);
+
+            AddAxisSlider(rotRow, "RX", -180, 180, 0, 1, (val) => UpdateProjectorTransform(idx, rotX: (float)val));
+            AddAxisSlider(rotRow, "RY", -180, 180, 0, 1, (val) => UpdateProjectorTransform(idx, rotY: (float)val));
+            AddAxisSlider(rotRow, "RZ", -180, 180, 0, 1, (val) => UpdateProjectorTransform(idx, rotZ: (float)val));
         }
     }
 
@@ -897,8 +904,17 @@ public partial class MainUI : CanvasLayer
         if (posZ.HasValue) pos.Z = posZ.Value;
         projNode.Position = pos;
 
-        // Keep rotation at identity (no rotation for now)
-        projNode.Basis = Basis.Identity;
+        // Rotation (accumulate into stored degrees, then apply as Euler)
+        Vector3 rot = _projRotDeg[projectorIndex];
+        if (rotX.HasValue) rot.X = rotX.Value;
+        if (rotY.HasValue) rot.Y = rotY.Value;
+        if (rotZ.HasValue) rot.Z = rotZ.Value;
+        _projRotDeg[projectorIndex] = rot;
+        projNode.Basis = Basis.FromEuler(new Vector3(
+            Mathf.DegToRad(rot.X),
+            Mathf.DegToRad(rot.Y),
+            Mathf.DegToRad(rot.Z)
+        ));
 
         // Rebuild venue grid
         var venueGrid = preview3D.GetNodeOrNull<LazerSystem.Preview.VenueGrid>("VenueGrid");

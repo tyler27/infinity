@@ -191,7 +191,7 @@ namespace LazerSystem.Preview
             }
         }
 
-        public void RenderFrame(List<LaserPoint> points)
+        public void RenderFrame(List<LaserPoint> points, int boundaryStartIndex = -1)
         {
             _beamMesh.ClearSurfaces();
 
@@ -229,6 +229,8 @@ namespace LazerSystem.Preview
 
             foreach (var seg in segments)
             {
+                bool isBoundary = boundaryStartIndex >= 0 && seg.start >= boundaryStartIndex;
+
                 for (int i = seg.start; i < seg.end; i++)
                 {
                     LaserPoint p0 = points[i];
@@ -237,17 +239,20 @@ namespace LazerSystem.Preview
                     Vector3 w0 = LaserPointToWorld(p0);
                     Vector3 w1 = LaserPointToWorld(p1);
 
-                    // ── Haze plane: origin → w0 → w1 (dim volumetric sheet) ──
-                    Color c0Haze = PointColor(p0, HazeDensity);
-                    Color c1Haze = PointColor(p1, HazeDensity);
-                    Color cOrig = PointColorBlend(p0, p1, HazeDensity * 0.15f);
+                    // ── Haze plane: origin → w0 → w1 (skip for zone boundary) ──
+                    if (!isBoundary)
+                    {
+                        Color c0Haze = PointColor(p0, HazeDensity);
+                        Color c1Haze = PointColor(p1, HazeDensity);
+                        Color cOrig = PointColorBlend(p0, p1, HazeDensity * 0.15f);
 
-                    _beamMesh.SurfaceSetColor(cOrig);
-                    _beamMesh.SurfaceAddVertex(origin);
-                    _beamMesh.SurfaceSetColor(c0Haze);
-                    _beamMesh.SurfaceAddVertex(w0);
-                    _beamMesh.SurfaceSetColor(c1Haze);
-                    _beamMesh.SurfaceAddVertex(w1);
+                        _beamMesh.SurfaceSetColor(cOrig);
+                        _beamMesh.SurfaceAddVertex(origin);
+                        _beamMesh.SurfaceSetColor(c0Haze);
+                        _beamMesh.SurfaceAddVertex(w0);
+                        _beamMesh.SurfaceSetColor(c1Haze);
+                        _beamMesh.SurfaceAddVertex(w1);
+                    }
 
                     // ── Wall hit: bright billboard quad at w0→w1 (crisp laser line on surface) ──
                     Vector3 lineDir = (w1 - w0).Normalized();
