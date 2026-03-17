@@ -19,6 +19,8 @@ namespace LazerSystem.Preview
 
         [ExportGroup("Fog / Haze")]
         [Export] public float HazeIntensity = 2f;
+        /// <summary>Controls beam plane transparency. 0 = invisible, 1 = max. Simulates haze/fog density in the venue.</summary>
+        [Export(PropertyHint.Range, "0,0.05,0.001")] public float HazeDensity = 0.01f;
 
         [ExportGroup("Source Beams")]
         [Export] public bool ShowSourceBeams = false;
@@ -218,6 +220,8 @@ namespace LazerSystem.Preview
 
             if (segments.Count == 0) return;
 
+            Vector3 origin = GlobalPosition; // projector position
+
             var camera = GetViewport()?.GetCamera3D();
             Vector3 camPos = camera != null ? camera.GlobalPosition : new Vector3(0, 5, 15);
 
@@ -233,25 +237,38 @@ namespace LazerSystem.Preview
                     Vector3 w0 = LaserPointToWorld(p0);
                     Vector3 w1 = LaserPointToWorld(p1);
 
+                    // ── Haze plane: origin → w0 → w1 (dim volumetric sheet) ──
+                    Color c0Haze = PointColor(p0, HazeDensity);
+                    Color c1Haze = PointColor(p1, HazeDensity);
+                    Color cOrig = PointColorBlend(p0, p1, HazeDensity * 0.15f);
+
+                    _beamMesh.SurfaceSetColor(cOrig);
+                    _beamMesh.SurfaceAddVertex(origin);
+                    _beamMesh.SurfaceSetColor(c0Haze);
+                    _beamMesh.SurfaceAddVertex(w0);
+                    _beamMesh.SurfaceSetColor(c1Haze);
+                    _beamMesh.SurfaceAddVertex(w1);
+
+                    // ── Wall hit: bright billboard quad at w0→w1 (crisp laser line on surface) ──
                     Vector3 lineDir = (w1 - w0).Normalized();
                     Vector3 camDir = ((camPos - w0) + (camPos - w1)).Normalized();
                     Vector3 side = lineDir.Cross(camDir).Normalized() * BeamWidth;
 
-                    Color c0 = PointColor(p0);
-                    Color c1 = PointColor(p1);
+                    Color c0Bright = PointColor(p0, 1f);
+                    Color c1Bright = PointColor(p1, 1f);
 
-                    _beamMesh.SurfaceSetColor(c0);
+                    _beamMesh.SurfaceSetColor(c0Bright);
                     _beamMesh.SurfaceAddVertex(w0 - side);
-                    _beamMesh.SurfaceSetColor(c0);
+                    _beamMesh.SurfaceSetColor(c0Bright);
                     _beamMesh.SurfaceAddVertex(w0 + side);
-                    _beamMesh.SurfaceSetColor(c1);
+                    _beamMesh.SurfaceSetColor(c1Bright);
                     _beamMesh.SurfaceAddVertex(w1 + side);
 
-                    _beamMesh.SurfaceSetColor(c0);
+                    _beamMesh.SurfaceSetColor(c0Bright);
                     _beamMesh.SurfaceAddVertex(w0 - side);
-                    _beamMesh.SurfaceSetColor(c1);
+                    _beamMesh.SurfaceSetColor(c1Bright);
                     _beamMesh.SurfaceAddVertex(w1 + side);
-                    _beamMesh.SurfaceSetColor(c1);
+                    _beamMesh.SurfaceSetColor(c1Bright);
                     _beamMesh.SurfaceAddVertex(w1 - side);
                 }
             }
@@ -262,7 +279,6 @@ namespace LazerSystem.Preview
             _sourceMesh.ClearSurfaces();
             if (ShowSourceBeams && _sourceMeshInstance.Visible)
             {
-                Vector3 origin = GlobalPosition; // projector position
                 _sourceMesh.SurfaceBegin(Mesh.PrimitiveType.Triangles);
 
                 foreach (var seg in segments)
@@ -328,13 +344,24 @@ namespace LazerSystem.Preview
             _sourceMesh.SurfaceAddVertex(b - side);
         }
 
-        private Color PointColor(LaserPoint pt)
+        private Color PointColor(LaserPoint pt, float alpha = 1f)
         {
             return new Color(
                 pt.r * HazeIntensity,
                 pt.g * HazeIntensity,
                 pt.b * HazeIntensity,
-                1f
+                alpha
+            );
+        }
+
+        /// <summary>Blended color between two points, used at the projector origin vertex.</summary>
+        private Color PointColorBlend(LaserPoint a, LaserPoint b, float alpha)
+        {
+            return new Color(
+                (a.r + b.r) * 0.5f * HazeIntensity,
+                (a.g + b.g) * 0.5f * HazeIntensity,
+                (a.b + b.b) * 0.5f * HazeIntensity,
+                alpha
             );
         }
 

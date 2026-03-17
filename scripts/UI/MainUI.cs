@@ -754,6 +754,49 @@ public partial class MainUI : CanvasLayer
         };
         vbox.AddChild(beamToggle);
 
+        // ── Haze Density slider ──
+        var hazeRow = new HBoxContainer();
+        hazeRow.AddThemeConstantOverride("separation", 6);
+        vbox.AddChild(hazeRow);
+
+        var hazeLabel = new Label();
+        hazeLabel.Text = "Haze Density";
+        hazeLabel.CustomMinimumSize = new Vector2(80, 0);
+        hazeLabel.HorizontalAlignment = HorizontalAlignment.Right;
+        hazeLabel.AddThemeColorOverride("font_color", TextColor);
+        hazeLabel.AddThemeFontSizeOverride("font_size", 11);
+        hazeRow.AddChild(hazeLabel);
+
+        var hazeSlider = new HSlider();
+        hazeSlider.MinValue = 0;
+        hazeSlider.MaxValue = 50;
+        hazeSlider.Value = 10;
+        hazeSlider.Step = 1;
+        hazeSlider.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        hazeSlider.CustomMinimumSize = new Vector2(0, 20);
+        hazeRow.AddChild(hazeSlider);
+
+        var hazeValueLabel = new Label();
+        hazeValueLabel.Text = "1.0%";
+        hazeValueLabel.CustomMinimumSize = new Vector2(45, 0);
+        hazeValueLabel.HorizontalAlignment = HorizontalAlignment.Left;
+        hazeValueLabel.AddThemeColorOverride("font_color", TextColor);
+        hazeValueLabel.AddThemeFontSizeOverride("font_size", 11);
+        hazeRow.AddChild(hazeValueLabel);
+
+        hazeSlider.ValueChanged += (val) =>
+        {
+            float pct = (float)(val / 10.0);
+            hazeValueLabel.Text = $"{pct:F1}%";
+            float density = (float)(val / 1000.0);
+            var preview3D = GetTree().Root.FindChild("Preview3D", true, false);
+            if (preview3D == null) return;
+            for (int i = 0; i < 4; i++)
+            {
+                var r = preview3D.GetNodeOrNull<LazerSystem.Preview.LaserPreviewRenderer>($"Projector{i + 1}");
+                if (r != null) r.HazeDensity = density;
+            }
+        };
 
         // ── Projector Positions & Rotation ──
         var posHeader = new Label();
