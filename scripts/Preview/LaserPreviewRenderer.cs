@@ -40,6 +40,11 @@ namespace LazerSystem.Preview
 
         private bool _showZoneBoundary;
 
+        // Cached per-frame render state to avoid repeated property access
+        private Vector3 _cachedOrigin;
+        private Basis _cachedBasis;
+        private float _cachedHalfAngleRad;
+
         /// <summary>Whether zone boundary is enabled for this projector.</summary>
         public bool ShowZoneBoundary => _showZoneBoundary;
 
@@ -50,7 +55,7 @@ namespace LazerSystem.Preview
             _beamMeshInstance = new MeshInstance3D();
             _beamMeshInstance.Mesh = _beamMesh;
             _beamMeshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
-            _beamMeshInstance.TopLevel = true; // Don't inherit parent transform — we use world coords
+            _beamMeshInstance.TopLevel = true;
 
             _beamMaterial = new StandardMaterial3D();
             _beamMaterial.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
@@ -67,7 +72,7 @@ namespace LazerSystem.Preview
             _sourceMeshInstance = new MeshInstance3D();
             _sourceMeshInstance.Mesh = _sourceMesh;
             _sourceMeshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
-            _sourceMeshInstance.TopLevel = true; // Don't inherit parent transform — we use world coords
+            _sourceMeshInstance.TopLevel = true;
             _sourceMeshInstance.Visible = false;
 
             _sourceMaterial = new StandardMaterial3D();
@@ -95,17 +100,9 @@ namespace LazerSystem.Preview
 
         /// <summary>
         /// Generates zone boundary as LaserPoints in scan space.
-        /// The boundary traces the zone's keystone corners, so it represents exactly
-        /// what the real projector would output. Points go through the same
-        /// rendering/ArtNet pipeline as pattern output.
         /// </summary>
-        /// <param name="corners">
-        /// Four keystone corners in scan space: [0]=BL, [1]=BR, [2]=TR, [3]=TL.
-        /// If null, defaults to the full -1..1 scan area.
-        /// </param>
         public List<LaserPoint> GenerateZoneBoundaryPoints(Vector2[] corners = null)
         {
-            // Default to full scan area if no keystone corners provided
             Vector2 bl = corners != null && corners.Length == 4 ? corners[0] : new Vector2(-1f, -1f);
             Vector2 br = corners != null && corners.Length == 4 ? corners[1] : new Vector2( 1f, -1f);
             Vector2 tr = corners != null && corners.Length == 4 ? corners[2] : new Vector2( 1f,  1f);
@@ -116,38 +113,30 @@ namespace LazerSystem.Preview
             float g = ZoneColor.G;
             float b = ZoneColor.B;
 
-            // Dimmer color for grid lines
             float gr = r * 0.4f;
             float gg = g * 0.4f;
             float gb = b * 0.4f;
 
-            int steps = 20; // points per line segment for smooth rendering
+            int steps = 12;
 
-            // ── Outer boundary (trace the keystone quad) ──
-            AddScanLine(pts, bl.X, bl.Y, br.X, br.Y, r, g, b, steps); // bottom
-            AddScanLine(pts, br.X, br.Y, tr.X, tr.Y, r, g, b, steps); // right
-            AddScanLine(pts, tr.X, tr.Y, tl.X, tl.Y, r, g, b, steps); // top
-            AddScanLine(pts, tl.X, tl.Y, bl.X, bl.Y, r, g, b, steps); // left
+            AddScanLine(pts, bl.X, bl.Y, br.X, br.Y, r, g, b, steps);
+            AddScanLine(pts, br.X, br.Y, tr.X, tr.Y, r, g, b, steps);
+            AddScanLine(pts, tr.X, tr.Y, tl.X, tl.Y, r, g, b, steps);
+            AddScanLine(pts, tl.X, tl.Y, bl.X, bl.Y, r, g, b, steps);
 
-            // ── Grid lines interpolated across the keystone quad ──
-            // Use bilinear interpolation so grid lines follow the keystone warp
-            int gridDivs = 4; // 4 divisions = lines at 0.25, 0.5, 0.75
+            int gridDivs = 4;
             for (int i = 1; i < gridDivs; i++)
             {
                 float t = (float)i / gridDivs;
-                // Horizontal line: lerp left edge and right edge at parameter t
                 Vector2 left = bl.Lerp(tl, t);
                 Vector2 right = br.Lerp(tr, t);
                 AddScanLine(pts, left.X, left.Y, right.X, right.Y, gr, gg, gb, steps);
-                // Vertical line: lerp bottom edge and top edge at parameter t
                 Vector2 bottom = bl.Lerp(br, t);
                 Vector2 top = tl.Lerp(tr, t);
                 AddScanLine(pts, bottom.X, bottom.Y, top.X, top.Y, gr, gg, gb, steps);
             }
 
-            // ── Center crosshair ──
             Vector2 center = (bl + br + tr + tl) * 0.25f;
-            // Cross arms along the quad's edge directions
             Vector2 hDir = ((br - bl) + (tr - tl)).Normalized() * 0.08f;
             Vector2 vDir = ((tl - bl) + (tr - br)).Normalized() * 0.08f;
             AddScanLine(pts, center.X - hDir.X, center.Y - hDir.Y,
@@ -155,31 +144,22 @@ namespace LazerSystem.Preview
             AddScanLine(pts, center.X - vDir.X, center.Y - vDir.Y,
                              center.X + vDir.X, center.Y + vDir.Y, r, g, b, 6);
 
-            // ── Corner brackets (follow the edges of the keystone quad) ──
-            float bFrac = 0.1f; // bracket = 10% of each edge
-            // BL corner
+            float bFrac = 0.1f;
             AddScanLine(pts, bl.X, bl.Y, bl.Lerp(br, bFrac).X, bl.Lerp(br, bFrac).Y, r, g, b, 4);
             AddScanLine(pts, bl.X, bl.Y, bl.Lerp(tl, bFrac).X, bl.Lerp(tl, bFrac).Y, r, g, b, 4);
-            // BR corner
             AddScanLine(pts, br.X, br.Y, br.Lerp(bl, bFrac).X, br.Lerp(bl, bFrac).Y, r, g, b, 4);
             AddScanLine(pts, br.X, br.Y, br.Lerp(tr, bFrac).X, br.Lerp(tr, bFrac).Y, r, g, b, 4);
-            // TR corner
             AddScanLine(pts, tr.X, tr.Y, tr.Lerp(tl, bFrac).X, tr.Lerp(tl, bFrac).Y, r, g, b, 4);
             AddScanLine(pts, tr.X, tr.Y, tr.Lerp(br, bFrac).X, tr.Lerp(br, bFrac).Y, r, g, b, 4);
-            // TL corner
             AddScanLine(pts, tl.X, tl.Y, tl.Lerp(tr, bFrac).X, tl.Lerp(tr, bFrac).Y, r, g, b, 4);
             AddScanLine(pts, tl.X, tl.Y, tl.Lerp(bl, bFrac).X, tl.Lerp(bl, bFrac).Y, r, g, b, 4);
 
             return pts;
         }
 
-        /// <summary>
-        /// Adds a line segment as LaserPoints with a blanked move to the start.
-        /// </summary>
         private static void AddScanLine(List<LaserPoint> pts, float x0, float y0, float x1, float y1,
             float r, float g, float b, int steps)
         {
-            // Blank move to start
             pts.Add(LaserPoint.Blanked(x0, y0));
 
             for (int i = 0; i <= steps; i++)
@@ -197,6 +177,11 @@ namespace LazerSystem.Preview
 
             if (points == null || points.Count < 2)
                 return;
+
+            // Cache per-frame constants (avoid repeated property access per-point)
+            _cachedOrigin = GlobalPosition;
+            _cachedBasis = GlobalTransform.Basis;
+            _cachedHalfAngleRad = Mathf.DegToRad(ScanAngleDeg * 0.5f);
 
             // Collect visible segments
             var segments = new List<(int start, int end)>();
@@ -220,8 +205,6 @@ namespace LazerSystem.Preview
 
             if (segments.Count == 0) return;
 
-            Vector3 origin = GlobalPosition; // projector position
-
             var camera = GetViewport()?.GetCamera3D();
             Vector3 camPos = camera != null ? camera.GlobalPosition : new Vector3(0, 5, 15);
 
@@ -231,13 +214,17 @@ namespace LazerSystem.Preview
             {
                 bool isBoundary = boundaryStartIndex >= 0 && seg.start >= boundaryStartIndex;
 
+                // Pre-compute first point's world position
+                Vector3 wPrev = LaserPointToWorld(points[seg.start]);
+
                 for (int i = seg.start; i < seg.end; i++)
                 {
                     LaserPoint p0 = points[i];
                     LaserPoint p1 = points[i + 1];
 
-                    Vector3 w0 = LaserPointToWorld(p0);
+                    Vector3 w0 = wPrev;
                     Vector3 w1 = LaserPointToWorld(p1);
+                    wPrev = w1; // reuse for next iteration
 
                     // ── Haze plane: origin → w0 → w1 (skip for zone boundary) ──
                     if (!isBoundary)
@@ -247,14 +234,14 @@ namespace LazerSystem.Preview
                         Color cOrig = PointColorBlend(p0, p1, HazeDensity * 0.15f);
 
                         _beamMesh.SurfaceSetColor(cOrig);
-                        _beamMesh.SurfaceAddVertex(origin);
+                        _beamMesh.SurfaceAddVertex(_cachedOrigin);
                         _beamMesh.SurfaceSetColor(c0Haze);
                         _beamMesh.SurfaceAddVertex(w0);
                         _beamMesh.SurfaceSetColor(c1Haze);
                         _beamMesh.SurfaceAddVertex(w1);
                     }
 
-                    // ── Wall hit: bright billboard quad at w0→w1 (crisp laser line on surface) ──
+                    // ── Wall hit: bright billboard quad at w0→w1 ──
                     Vector3 lineDir = (w1 - w0).Normalized();
                     Vector3 camDir = ((camPos - w0) + (camPos - w1)).Normalized();
                     Vector3 side = lineDir.Cross(camDir).Normalized() * BeamWidth;
@@ -280,7 +267,7 @@ namespace LazerSystem.Preview
 
             _beamMesh.SurfaceEnd();
 
-            // Draw source beams (thin lines from projector origin to each point on the wall)
+            // Draw source beams
             _sourceMesh.ClearSurfaces();
             if (ShowSourceBeams && _sourceMeshInstance.Visible)
             {
@@ -288,8 +275,6 @@ namespace LazerSystem.Preview
 
                 foreach (var seg in segments)
                 {
-                    // Draw a source beam to the first and last point of each segment
-                    // (drawing to every point would be too dense)
                     LaserPoint pFirst = points[seg.start];
                     LaserPoint pLast = points[seg.end];
 
@@ -300,9 +285,9 @@ namespace LazerSystem.Preview
                     Color cLast = new Color(pLast.r, pLast.g, pLast.b, SourceBeamAlpha);
                     Color cOrigin = new Color(cFirst.R * 0.3f, cFirst.G * 0.3f, cFirst.B * 0.3f, SourceBeamAlpha * 0.3f);
 
-                    AddSourceBeamLine(origin, wFirst, cOrigin, cFirst, SourceBeamWidth);
+                    AddSourceBeamLine(_cachedOrigin, wFirst, cOrigin, cFirst, SourceBeamWidth);
                     if (seg.end != seg.start)
-                        AddSourceBeamLine(origin, wLast, cOrigin, cLast, SourceBeamWidth);
+                        AddSourceBeamLine(_cachedOrigin, wLast, cOrigin, cLast, SourceBeamWidth);
                 }
 
                 _sourceMesh.SurfaceEnd();
@@ -359,7 +344,6 @@ namespace LazerSystem.Preview
             );
         }
 
-        /// <summary>Blended color between two points, used at the projector origin vertex.</summary>
         private Color PointColorBlend(LaserPoint a, LaserPoint b, float alpha)
         {
             return new Color(
@@ -377,55 +361,41 @@ namespace LazerSystem.Preview
 
         /// <summary>
         /// Maps a normalized scan coordinate (-1..1) to a world-space point.
-        /// Uses the scan angle (galvo FOV) to compute a beam direction,
-        /// then raycasts against venue surfaces (back wall, floor, ceiling, side walls).
-        /// Beam terminates where it hits — like a real laser.
+        /// Uses cached per-frame origin, basis, and half-angle to avoid repeated property access.
         /// </summary>
         private Vector3 ScanPointToWorld(float scanX, float scanY)
         {
-            // Convert scan coordinates to galvo angles
-            float halfAngleRad = Mathf.DegToRad(ScanAngleDeg * 0.5f);
-            float angleX = scanX * halfAngleRad;
-            float angleY = scanY * halfAngleRad;
+            float angleX = scanX * _cachedHalfAngleRad;
+            float angleY = scanY * _cachedHalfAngleRad;
 
-            // Build local direction from angles (beam shoots along local -Z)
             Vector3 localDir = new Vector3(
                 Mathf.Tan(angleX),
                 Mathf.Tan(angleY),
                 -1f
             ).Normalized();
 
-            // Transform direction to world space
-            Vector3 worldOrigin = GlobalPosition;
-            Vector3 worldDir = GlobalTransform.Basis * localDir;
+            Vector3 worldDir = _cachedBasis * localDir;
 
-            // Raycast against venue surfaces — find nearest hit
             float nearest = MaxRayDistance;
 
-            // Back wall: z = -25
-            float hitDist = RayPlaneZ(worldOrigin, worldDir, -25f);
+            float hitDist = RayPlaneZ(_cachedOrigin, worldDir, -25f);
             if (hitDist > 0 && hitDist < nearest) nearest = hitDist;
 
-            // Floor: y = 0
-            hitDist = RayPlaneY(worldOrigin, worldDir, 0f);
+            hitDist = RayPlaneY(_cachedOrigin, worldDir, 0f);
             if (hitDist > 0 && hitDist < nearest) nearest = hitDist;
 
-            // Ceiling: y = 15
-            hitDist = RayPlaneY(worldOrigin, worldDir, 15f);
+            hitDist = RayPlaneY(_cachedOrigin, worldDir, 15f);
             if (hitDist > 0 && hitDist < nearest) nearest = hitDist;
 
-            // Left wall: x = -20
-            hitDist = RayPlaneX(worldOrigin, worldDir, -20f);
+            hitDist = RayPlaneX(_cachedOrigin, worldDir, -20f);
             if (hitDist > 0 && hitDist < nearest) nearest = hitDist;
 
-            // Right wall: x = 20
-            hitDist = RayPlaneX(worldOrigin, worldDir, 20f);
+            hitDist = RayPlaneX(_cachedOrigin, worldDir, 20f);
             if (hitDist > 0 && hitDist < nearest) nearest = hitDist;
 
-            return worldOrigin + worldDir * nearest;
+            return _cachedOrigin + worldDir * nearest;
         }
 
-        /// <summary>Ray-plane intersection for a plane at z = planeZ. Returns distance or -1.</summary>
         private static float RayPlaneZ(Vector3 origin, Vector3 dir, float planeZ)
         {
             if (Mathf.Abs(dir.Z) < 0.0001f) return -1f;
@@ -433,7 +403,6 @@ namespace LazerSystem.Preview
             return t > 0.001f ? t : -1f;
         }
 
-        /// <summary>Ray-plane intersection for a plane at y = planeY. Returns distance or -1.</summary>
         private static float RayPlaneY(Vector3 origin, Vector3 dir, float planeY)
         {
             if (Mathf.Abs(dir.Y) < 0.0001f) return -1f;
@@ -441,7 +410,6 @@ namespace LazerSystem.Preview
             return t > 0.001f ? t : -1f;
         }
 
-        /// <summary>Ray-plane intersection for a plane at x = planeX. Returns distance or -1.</summary>
         private static float RayPlaneX(Vector3 origin, Vector3 dir, float planeX)
         {
             if (Mathf.Abs(dir.X) < 0.0001f) return -1f;

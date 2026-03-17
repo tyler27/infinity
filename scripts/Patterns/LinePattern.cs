@@ -12,11 +12,10 @@ namespace LazerSystem.Patterns
     {
         public string PatternName => "Line";
 
-        private const int PointCount = 32;
+        private const int PointCount = 24;
 
-        public List<LaserPoint> Generate(float time, PatternParameters parameters)
+        public void Generate(float time, PatternParameters parameters, List<LaserPoint> output)
         {
-            var points = new List<LaserPoint>();
             Color c = parameters.EffectiveColor();
             float halfLength = parameters.size;
             float angle = Mathf.DegToRad(parameters.rotation) + time * parameters.speed;
@@ -32,7 +31,7 @@ namespace LazerSystem.Patterns
             float by = cy + dy;
 
             // Blank move to start
-            points.Add(LaserPoint.Blanked(ax, ay));
+            output.Add(LaserPoint.Blanked(ax, ay));
 
             // Draw line from A to B
             for (int i = 0; i <= PointCount; i++)
@@ -40,10 +39,8 @@ namespace LazerSystem.Patterns
                 float t = (float)i / PointCount;
                 float px = Mathf.Lerp(ax, bx, t);
                 float py = Mathf.Lerp(ay, by, t);
-                points.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
+                output.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
             }
-
-            return points;
         }
     }
 }

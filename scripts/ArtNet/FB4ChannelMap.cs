@@ -66,7 +66,30 @@ namespace LazerSystem.ArtNet
             float zoom)
         {
             byte[] frame = new byte[512];
+            FillDmxFrame(frame, enabled, pattern, x, y, sizeX, sizeY, rotation,
+                color, scanSpeed, effect, effectSpeed, effectSize, zoom);
+            return frame;
+        }
 
+        /// <summary>
+        /// Fills an existing DMX frame buffer (avoids allocation).
+        /// </summary>
+        public static void FillDmxFrame(
+            byte[] frame,
+            bool enabled,
+            int pattern,
+            float x,
+            float y,
+            float sizeX,
+            float sizeY,
+            float rotation,
+            Color color,
+            float scanSpeed,
+            int effect,
+            float effectSpeed,
+            float effectSize,
+            float zoom)
+        {
             // Ch1: Control - 0 for blackout, 255 for enabled
             frame[CH_CONTROL - 1] = enabled ? (byte)255 : (byte)0;
 
@@ -110,8 +133,6 @@ namespace LazerSystem.ArtNet
 
             // Ch16: Zoom
             frame[CH_ZOOM - 1] = FloatToUnipolar(zoom);
-
-            return frame;
         }
 
         /// <summary>

@@ -248,17 +248,17 @@ namespace LazerSystem.Timeline
         /// </summary>
         private List<LaserPoint> GeneratePatternPoints(LaserPatternType patternType, float time, PatternParameters parameters)
         {
+            var points = new List<LaserPoint>();
             ILaserPattern pattern = PatternFactory.Create(patternType);
             if (pattern != null)
             {
-                return pattern.Generate(time, parameters);
+                pattern.Generate(time, parameters, points);
+                return points;
             }
 
             // Fallback: return single center point
-            return new List<LaserPoint>
-            {
-                LaserPoint.Colored(parameters.position.X, parameters.position.Y, parameters.EffectiveColor())
-            };
+            points.Add(LaserPoint.Colored(parameters.position.X, parameters.position.Y, parameters.EffectiveColor()));
+            return points;
         }
 
         /// <summary>

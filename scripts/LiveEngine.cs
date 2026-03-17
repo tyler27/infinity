@@ -98,6 +98,17 @@ public partial class LiveEngine : Node
 	// Accumulate points per projector per frame so multiple cues can layer
 	private List<LaserPoint>[] _projectorPoints;
 
+	// Pre-allocated buffers to eliminate per-frame allocations
+	private PatternParameters _cueParams;
+	private PatternParameters _finalParams;
+	private List<LaserPoint> _rawPoints;
+	private byte[][] _dmxFrameBuffers;
+
+	// DMX accumulator per projector (computed inline during point generation)
+	private float[] _dmxAvgR, _dmxAvgG, _dmxAvgB, _dmxAvgX, _dmxAvgY;
+	private float[] _dmxMinX, _dmxMaxX, _dmxMinY, _dmxMaxY;
+	private int[] _dmxVisibleCount;
+
 	// --------------- Godot Lifecycle ---------------
 
 	public override void _Ready()
@@ -140,7 +151,27 @@ public partial class LiveEngine : Node
 		_projectorHasOutput = new bool[ProjectorCount];
 		_projectorPoints = new List<LaserPoint>[ProjectorCount];
 		for (int i = 0; i < ProjectorCount; i++)
-			_projectorPoints[i] = new List<LaserPoint>();
+			_projectorPoints[i] = new List<LaserPoint>(512);
+
+		// Pre-allocate reusable buffers
+		_cueParams = new PatternParameters();
+		_finalParams = new PatternParameters();
+		_rawPoints = new List<LaserPoint>(256);
+		_dmxFrameBuffers = new byte[ProjectorCount][];
+		for (int i = 0; i < ProjectorCount; i++)
+			_dmxFrameBuffers[i] = new byte[512];
+
+		// DMX accumulators
+		_dmxAvgR = new float[ProjectorCount];
+		_dmxAvgG = new float[ProjectorCount];
+		_dmxAvgB = new float[ProjectorCount];
+		_dmxAvgX = new float[ProjectorCount];
+		_dmxAvgY = new float[ProjectorCount];
+		_dmxMinX = new float[ProjectorCount];
+		_dmxMaxX = new float[ProjectorCount];
+		_dmxMinY = new float[ProjectorCount];
+		_dmxMaxY = new float[ProjectorCount];
+		_dmxVisibleCount = new int[ProjectorCount];
 
 		// Find renderers in the scene tree
 		_renderers = new LaserPreviewRenderer[ProjectorCount];
@@ -185,7 +216,14 @@ public partial class LiveEngine : Node
 		{
 			_projectorHasOutput[i] = false;
 			_projectorPoints[i].Clear();
+			_dmxAvgR[i] = 0f; _dmxAvgG[i] = 0f; _dmxAvgB[i] = 0f;
+			_dmxAvgX[i] = 0f; _dmxAvgY[i] = 0f;
+			_dmxMinX[i] = float.MaxValue; _dmxMaxX[i] = float.MinValue;
+			_dmxMinY[i] = float.MaxValue; _dmxMaxY[i] = float.MinValue;
+			_dmxVisibleCount[i] = 0;
 		}
+
+		var zoneManager = LazerSystem.Zones.ZoneManager.Instance;
 
 		// Iterate over every cell in the active grid
 		for (int row = 0; row < RowCount; row++)
@@ -199,29 +237,28 @@ public partial class LiveEngine : Node
 				if (cue == null)
 					continue;
 
-				// Build pattern parameters from cue
-				PatternParameters cueParams = PatternParameters.FromCue(cue);
+				// Build pattern parameters from cue (no allocation)
+				_cueParams.CopyFromCue(cue);
 
-				// Apply overrides
-				PatternParameters finalParams = ApplyOverrides(cueParams);
+				// Apply overrides (no allocation)
+				ApplyOverrides(_cueParams, _finalParams);
 
 				// Get pattern generator
 				ILaserPattern pattern = PatternFactory.Create(cue.PatternType);
 				if (pattern == null)
 					continue;
 
-				// Generate points (unclamped so we can detect overflow)
-				List<LaserPoint> rawPoints = pattern.Generate(time, finalParams);
-				if (rawPoints == null || rawPoints.Count == 0)
+				// Generate points into reusable list
+				_rawPoints.Clear();
+				pattern.Generate(time, _finalParams, _rawPoints);
+				if (_rawPoints.Count == 0)
 					continue;
 
-				// Detect clipping: check if the effective pattern parameters
-				// would produce output that exceeds the -1..1 zone boundary.
-				// This is simpler and more reliable than checking post-clamp points.
+				// Detect clipping
 				if (!_overflowDetected)
 				{
-					float extentX = finalParams.size + Mathf.Abs(finalParams.position.X) + finalParams.amplitude;
-					float extentY = finalParams.size + Mathf.Abs(finalParams.position.Y) + finalParams.amplitude;
+					float extentX = _finalParams.size + Mathf.Abs(_finalParams.position.X) + _finalParams.amplitude;
+					float extentY = _finalParams.size + Mathf.Abs(_finalParams.position.Y) + _finalParams.amplitude;
 					if (extentX > 1.0f || extentY > 1.0f)
 						_overflowDetected = true;
 				}
@@ -234,16 +271,22 @@ public partial class LiveEngine : Node
 					if (!ProjectorEnabled[zone])
 						continue;
 
-					// Apply zone geometric transforms if available
-					List<LaserPoint> zonePoints = rawPoints;
-					var zoneManager = LazerSystem.Zones.ZoneManager.Instance;
+					_projectorHasOutput[zone] = true;
+
+					// Record start index before adding points
+					int startIdx = _projectorPoints[zone].Count;
+
+					// Add raw points directly to the projector list
+					_projectorPoints[zone].AddRange(_rawPoints);
+
+					// Transform in-place if zone manager available
 					if (zoneManager != null)
 					{
-						zonePoints = zoneManager.TransformPoints(zone, rawPoints);
+						zoneManager.TransformPointsInPlace(zone, _projectorPoints[zone], startIdx);
 					}
 
-					_projectorHasOutput[zone] = true;
-					_projectorPoints[zone].AddRange(zonePoints);
+					// Accumulate DMX stats for these points
+					AccumulateDmxStats(zone, _projectorPoints[zone], startIdx);
 				}
 			}
 		}
@@ -260,7 +303,6 @@ public partial class LiveEngine : Node
 			{
 				// Find the zone's keystone corners for this projector
 				Vector2[] corners = null;
-				var zoneManager = LazerSystem.Zones.ZoneManager.Instance;
 				if (zoneManager != null)
 				{
 					var zoneIndices = zoneManager.GetZonesForProjector(i);
@@ -270,11 +312,13 @@ public partial class LiveEngine : Node
 					}
 				}
 
+				int startIdx = _projectorPoints[i].Count;
 				var boundaryPts = _renderers[i].GenerateZoneBoundaryPoints(corners);
 				if (boundaryPts != null && boundaryPts.Count > 0)
 				{
 					_projectorHasOutput[i] = true;
 					_projectorPoints[i].AddRange(boundaryPts);
+					AccumulateDmxStats(i, _projectorPoints[i], startIdx);
 				}
 			}
 		}
@@ -287,7 +331,7 @@ public partial class LiveEngine : Node
 				if (_renderers[i] != null)
 					_renderers[i].RenderFrame(_projectorPoints[i], boundaryStartIdx[i]);
 
-				SendProjectorDmx(i, _projectorPoints[i]);
+				SendProjectorDmx(i);
 			}
 			else
 			{
@@ -297,8 +341,6 @@ public partial class LiveEngine : Node
 				SendProjectorBlackout(i);
 			}
 		}
-
-		// Zone boundary overflow is now handled per-projector via LaserPreviewRenderer
 
 		// Feed 2D output view (if MainUI has one)
 		var mainUI = GetNodeOrNull<MainUI>("../UI");
@@ -420,7 +462,7 @@ public partial class LiveEngine : Node
 
 	// --------------- Override Blending ---------------
 
-	private PatternParameters ApplyOverrides(PatternParameters cueParams)
+	private void ApplyOverrides(PatternParameters cueParams, PatternParameters result)
 	{
 		// Master controls always apply
 		float finalSize = cueParams.size * MasterSize;
@@ -430,10 +472,6 @@ public partial class LiveEngine : Node
 		float finalRotation = cueParams.rotation + LiveOverrides.rotation;
 		Vector2 finalPosition = cueParams.position + LiveOverrides.position;
 		float finalSpeed = cueParams.speed * LiveOverrides.speed;
-		float finalSpread = cueParams.spread;
-		int finalCount = cueParams.count;
-		float finalFrequency = cueParams.frequency;
-		float finalAmplitude = cueParams.amplitude;
 
 		// Color override: if not white, replace cue color
 		Color finalColor = cueParams.color;
@@ -448,54 +486,64 @@ public partial class LiveEngine : Node
 		finalIntensity = Mathf.Clamp(finalIntensity, 0f, 1f);
 		finalSize = Mathf.Clamp(finalSize, 0f, 10f);
 
-		return new PatternParameters
+		// Write into pre-allocated result
+		result.color = finalColor;
+		result.intensity = finalIntensity;
+		result.size = finalSize;
+		result.rotation = finalRotation;
+		result.speed = finalSpeed;
+		result.spread = cueParams.spread;
+		result.count = cueParams.count;
+		result.frequency = cueParams.frequency;
+		result.amplitude = cueParams.amplitude;
+		result.position = finalPosition;
+	}
+
+	// --------------- DMX Stats Accumulation ---------------
+
+	/// <summary>
+	/// Accumulates color/position stats for DMX output while points are being added,
+	/// avoiding a separate O(n) pass later.
+	/// </summary>
+	private void AccumulateDmxStats(int projector, List<LaserPoint> points, int startIndex)
+	{
+		for (int i = startIndex; i < points.Count; i++)
 		{
-			color = finalColor,
-			intensity = finalIntensity,
-			size = finalSize,
-			rotation = finalRotation,
-			speed = finalSpeed,
-			spread = finalSpread,
-			count = finalCount,
-			frequency = finalFrequency,
-			amplitude = finalAmplitude,
-			position = finalPosition
-		};
+			LaserPoint pt = points[i];
+			if (pt.blanking) continue;
+
+			_dmxAvgR[projector] += pt.r;
+			_dmxAvgG[projector] += pt.g;
+			_dmxAvgB[projector] += pt.b;
+			_dmxAvgX[projector] += pt.x;
+			_dmxAvgY[projector] += pt.y;
+			_dmxVisibleCount[projector]++;
+
+			if (pt.x < _dmxMinX[projector]) _dmxMinX[projector] = pt.x;
+			if (pt.x > _dmxMaxX[projector]) _dmxMaxX[projector] = pt.x;
+			if (pt.y < _dmxMinY[projector]) _dmxMinY[projector] = pt.y;
+			if (pt.y > _dmxMaxY[projector]) _dmxMaxY[projector] = pt.y;
+		}
 	}
 
 	// --------------- DMX Output ---------------
 
-	private void SendProjectorDmx(int projectorIndex, List<LaserPoint> points)
+	private void SendProjectorDmx(int projectorIndex)
 	{
 		if (ArtNetManager.Instance == null)
 			return;
 
-		// Compute average color and position from all generated points for DMX mapping
-		float avgR = 0f, avgG = 0f, avgB = 0f;
-		float avgX = 0f, avgY = 0f;
-		int visibleCount = 0;
-
-		for (int i = 0; i < points.Count; i++)
-		{
-			LaserPoint pt = points[i];
-			if (pt.blanking)
-				continue;
-			avgR += pt.r;
-			avgG += pt.g;
-			avgB += pt.b;
-			avgX += pt.x;
-			avgY += pt.y;
-			visibleCount++;
-		}
+		int visibleCount = _dmxVisibleCount[projectorIndex];
+		float avgR = 0f, avgG = 0f, avgB = 0f, avgX = 0f, avgY = 0f;
 
 		if (visibleCount > 0)
 		{
 			float inv = 1f / visibleCount;
-			avgR *= inv;
-			avgG *= inv;
-			avgB *= inv;
-			avgX *= inv;
-			avgY *= inv;
+			avgR = _dmxAvgR[projectorIndex] * inv;
+			avgG = _dmxAvgG[projectorIndex] * inv;
+			avgB = _dmxAvgB[projectorIndex] * inv;
+			avgX = _dmxAvgX[projectorIndex] * inv;
+			avgY = _dmxAvgY[projectorIndex] * inv;
 		}
 
 		Color dmxColor = new Color(
@@ -504,23 +552,12 @@ public partial class LiveEngine : Node
 			Mathf.Clamp(avgB, 0f, 1f)
 		);
 
-		// Compute bounding extent of visible points for size mapping
-		float minX = float.MaxValue, maxX = float.MinValue;
-		float minY = float.MaxValue, maxY = float.MinValue;
-		for (int i = 0; i < points.Count; i++)
-		{
-			LaserPoint pt = points[i];
-			if (pt.blanking) continue;
-			if (pt.x < minX) minX = pt.x;
-			if (pt.x > maxX) maxX = pt.x;
-			if (pt.y < minY) minY = pt.y;
-			if (pt.y > maxY) maxY = pt.y;
-		}
+		float sizeX = visibleCount > 0 ? Mathf.Clamp((_dmxMaxX[projectorIndex] - _dmxMinX[projectorIndex]) * 0.5f, 0f, 1f) : 0f;
+		float sizeY = visibleCount > 0 ? Mathf.Clamp((_dmxMaxY[projectorIndex] - _dmxMinY[projectorIndex]) * 0.5f, 0f, 1f) : 0f;
 
-		float sizeX = visibleCount > 0 ? Mathf.Clamp((maxX - minX) * 0.5f, 0f, 1f) : 0f;
-		float sizeY = visibleCount > 0 ? Mathf.Clamp((maxY - minY) * 0.5f, 0f, 1f) : 0f;
-
-		byte[] frame = FB4ChannelMap.BuildDmxFrame(
+		// Fill into pre-allocated buffer (no allocation)
+		FB4ChannelMap.FillDmxFrame(
+			_dmxFrameBuffers[projectorIndex],
 			enabled: true,
 			pattern: 0,
 			x: Mathf.Clamp(avgX, -1f, 1f),
@@ -536,7 +573,7 @@ public partial class LiveEngine : Node
 			zoom: 1f
 		);
 
-		ArtNetManager.Instance.UpdateDmxFrame(projectorIndex, frame);
+		ArtNetManager.Instance.UpdateDmxFrame(projectorIndex, _dmxFrameBuffers[projectorIndex]);
 	}
 
 	private void SendProjectorBlackout(int projectorIndex)
@@ -544,7 +581,9 @@ public partial class LiveEngine : Node
 		if (ArtNetManager.Instance == null)
 			return;
 
-		byte[] frame = FB4ChannelMap.BuildDmxFrame(
+		// Fill into pre-allocated buffer (no allocation)
+		FB4ChannelMap.FillDmxFrame(
+			_dmxFrameBuffers[projectorIndex],
 			enabled: false,
 			pattern: 0,
 			x: 0f,
@@ -560,7 +599,7 @@ public partial class LiveEngine : Node
 			zoom: 0f
 		);
 
-		ArtNetManager.Instance.UpdateDmxFrame(projectorIndex, frame);
+		ArtNetManager.Instance.UpdateDmxFrame(projectorIndex, _dmxFrameBuffers[projectorIndex]);
 	}
 
 	private void SendBlackoutDmx()

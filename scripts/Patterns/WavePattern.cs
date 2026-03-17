@@ -6,17 +6,15 @@ namespace LazerSystem.Patterns
 {
     /// <summary>
     /// Sine wave pattern. Animated via frequency, amplitude, and speed.
-    /// Generates approximately 100 points along the wave.
     /// </summary>
     public class WavePattern : ILaserPattern
     {
         public string PatternName => "Wave";
 
-        private const int PointCount = 100;
+        private const int PointCount = 64;
 
-        public List<LaserPoint> Generate(float time, PatternParameters parameters)
+        public void Generate(float time, PatternParameters parameters, List<LaserPoint> output)
         {
-            var points = new List<LaserPoint>();
             Color c = parameters.EffectiveColor();
             float halfWidth = parameters.size;
             float amplitude = parameters.amplitude;
@@ -45,13 +43,11 @@ namespace LazerSystem.Patterns
 
                 if (i == 0)
                 {
-                    points.Add(LaserPoint.Blanked(px, py));
+                    output.Add(LaserPoint.Blanked(px, py));
                 }
 
-                points.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
+                output.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
             }
-
-            return points;
         }
     }
 }

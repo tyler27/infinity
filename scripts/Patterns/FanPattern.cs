@@ -11,11 +11,10 @@ namespace LazerSystem.Patterns
     {
         public string PatternName => "Fan";
 
-        private const int PointsPerBeam = 16;
+        private const int PointsPerBeam = 10;
 
-        public List<LaserPoint> Generate(float time, PatternParameters parameters)
+        public void Generate(float time, PatternParameters parameters, List<LaserPoint> output)
         {
-            var points = new List<LaserPoint>();
             Color c = parameters.EffectiveColor();
             int beamCount = Mathf.Max(1, parameters.count);
             float spreadRad = Mathf.DegToRad(parameters.spread);
@@ -33,7 +32,7 @@ namespace LazerSystem.Patterns
                 float dy = Mathf.Sin(angle);
 
                 // Blank move to center
-                points.Add(LaserPoint.Blanked(cx, cy));
+                output.Add(LaserPoint.Blanked(cx, cy));
 
                 // Draw beam outward
                 for (int p = 0; p < PointsPerBeam; p++)
@@ -41,11 +40,9 @@ namespace LazerSystem.Patterns
                     float frac = (float)p / (PointsPerBeam - 1);
                     float px = cx + dx * length * frac;
                     float py = cy + dy * length * frac;
-                    points.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
+                    output.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
                 }
             }
-
-            return points;
         }
     }
 }

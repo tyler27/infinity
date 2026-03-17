@@ -44,39 +44,52 @@ namespace LazerSystem.ILDA
         }
 
         /// <summary>
-        /// Returns the laser points for the current frame based on elapsed time and playback speed.
+        /// Generates the laser points for the current frame based on elapsed time and playback speed.
         /// The speed parameter from PatternParameters scales the playback rate.
         /// </summary>
-        public List<LaserPoint> Generate(float time, PatternParameters parameters)
+        public void Generate(float time, PatternParameters parameters, List<LaserPoint> output)
         {
             if (_file.TotalFrames == 0)
-                return new List<LaserPoint>();
+                return;
+
+            List<LaserPoint> sourceFrame;
 
             // Single-frame files always return the same frame
             if (_file.TotalFrames == 1)
-                return ApplyParameters(_cachedFrames[0], parameters);
+            {
+                sourceFrame = _cachedFrames[0];
+            }
+            else
+            {
+                float effectiveFps = framesPerSecond * parameters.speed;
+                if (effectiveFps <= 0f)
+                {
+                    sourceFrame = _cachedFrames[0];
+                }
+                else
+                {
+                    // Calculate which frame to show based on time, looping for multi-frame files
+                    float frameFloat = time * effectiveFps;
+                    int frameIndex = ((int)frameFloat) % _file.TotalFrames;
+                    if (frameIndex < 0) frameIndex += _file.TotalFrames;
+                    sourceFrame = _cachedFrames[frameIndex];
+                }
+            }
 
-            float effectiveFps = framesPerSecond * parameters.speed;
-            if (effectiveFps <= 0f)
-                return ApplyParameters(_cachedFrames[0], parameters);
-
-            // Calculate which frame to show based on time, looping for multi-frame files
-            float frameFloat = time * effectiveFps;
-            int frameIndex = ((int)frameFloat) % _file.TotalFrames;
-            if (frameIndex < 0) frameIndex += _file.TotalFrames;
-
-            return ApplyParameters(_cachedFrames[frameIndex], parameters);
+            ApplyParameters(sourceFrame, parameters, output);
         }
 
         /// <summary>
         /// Applies PatternParameters (size, rotation, position, color tint) to the frame points.
         /// </summary>
-        private static List<LaserPoint> ApplyParameters(List<LaserPoint> sourcePoints, PatternParameters parameters)
+        private static void ApplyParameters(List<LaserPoint> sourcePoints, PatternParameters parameters, List<LaserPoint> output)
         {
             if (parameters == null)
-                return new List<LaserPoint>(sourcePoints);
+            {
+                output.AddRange(sourcePoints);
+                return;
+            }
 
-            var result = new List<LaserPoint>(sourcePoints.Count);
             float cos = Mathf.Cos(Mathf.DegToRad(parameters.rotation));
             float sin = Mathf.Sin(Mathf.DegToRad(parameters.rotation));
             Color tint = parameters.EffectiveColor();
@@ -102,10 +115,8 @@ namespace LazerSystem.ILDA
                 float cg = src.blanking ? 0f : src.g * tint.G;
                 float cb = src.blanking ? 0f : src.b * tint.B;
 
-                result.Add(new LaserPoint(fx, fy, cr, cg, cb, src.blanking));
+                output.Add(new LaserPoint(fx, fy, cr, cg, cb, src.blanking));
             }
-
-            return result;
         }
     }
 }

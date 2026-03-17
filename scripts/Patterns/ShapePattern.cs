@@ -13,20 +13,23 @@ namespace LazerSystem.Patterns
     {
         public string PatternName => "Shape";
 
-        private const int PointsPerEdge = 8;
+        private const int PointsPerEdge = 6;
+        private const int MaxSides = 32;
 
         private readonly bool _isStar;
+
+        // Pre-allocated vertex buffer to avoid per-frame allocations
+        private readonly Vector2[] _vertexBuffer = new Vector2[MaxSides * 2];
 
         public ShapePattern(bool isStar = false)
         {
             _isStar = isStar;
         }
 
-        public List<LaserPoint> Generate(float time, PatternParameters parameters)
+        public void Generate(float time, PatternParameters parameters, List<LaserPoint> output)
         {
-            var points = new List<LaserPoint>();
             Color c = parameters.EffectiveColor();
-            int sides = Mathf.Max(3, parameters.count);
+            int sides = Mathf.Clamp(parameters.count, 3, MaxSides);
             float radius = parameters.size;
             float rotationOffset = Mathf.DegToRad(parameters.rotation) + time * parameters.speed;
             float cx = parameters.position.X;
@@ -34,85 +37,77 @@ namespace LazerSystem.Patterns
 
             if (_isStar)
             {
-                return GenerateStar(parameters, time, sides, radius, rotationOffset, cx, cy, c);
+                GenerateStar(output, sides, radius, rotationOffset, cx, cy, c);
             }
-
-            return GeneratePolygon(sides, radius, rotationOffset, cx, cy, c);
+            else
+            {
+                GeneratePolygon(output, sides, radius, rotationOffset, cx, cy, c);
+            }
         }
 
-        private List<LaserPoint> GeneratePolygon(int sides, float radius, float rotationOffset,
-            float cx, float cy, Color c)
+        private void GeneratePolygon(List<LaserPoint> output, int sides, float radius,
+            float rotationOffset, float cx, float cy, Color c)
         {
-            var points = new List<LaserPoint>();
-
-            // Compute vertices
-            var vertices = new Vector2[sides];
+            // Compute vertices into pre-allocated buffer
             for (int i = 0; i < sides; i++)
             {
                 float angle = rotationOffset + (float)i / sides * Mathf.Pi * 2f;
-                vertices[i] = new Vector2(
+                _vertexBuffer[i] = new Vector2(
                     cx + Mathf.Cos(angle) * radius,
                     cy + Mathf.Sin(angle) * radius);
             }
 
             // Blank move to first vertex
-            points.Add(LaserPoint.Blanked(vertices[0].X, vertices[0].Y));
+            output.Add(LaserPoint.Blanked(_vertexBuffer[0].X, _vertexBuffer[0].Y));
 
             // Draw edges
             for (int i = 0; i < sides; i++)
             {
-                Vector2 from = vertices[i];
-                Vector2 to = vertices[(i + 1) % sides];
+                Vector2 from = _vertexBuffer[i];
+                Vector2 to = _vertexBuffer[(i + 1) % sides];
 
                 for (int p = 0; p <= PointsPerEdge; p++)
                 {
                     float t = (float)p / PointsPerEdge;
                     float px = Mathf.Lerp(from.X, to.X, t);
                     float py = Mathf.Lerp(from.Y, to.Y, t);
-                    points.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
+                    output.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
                 }
             }
-
-            return points;
         }
 
-        private List<LaserPoint> GenerateStar(PatternParameters parameters, float time,
-            int starPoints, float outerRadius, float rotationOffset,
-            float cx, float cy, Color c)
+        private void GenerateStar(List<LaserPoint> output, int starPoints, float outerRadius,
+            float rotationOffset, float cx, float cy, Color c)
         {
-            var points = new List<LaserPoint>();
             float innerRadius = outerRadius * 0.4f;
             int totalVertices = starPoints * 2;
 
-            var vertices = new Vector2[totalVertices];
             for (int i = 0; i < totalVertices; i++)
             {
                 float angle = rotationOffset + (float)i / totalVertices * Mathf.Pi * 2f;
                 float r = (i % 2 == 0) ? outerRadius : innerRadius;
-                vertices[i] = new Vector2(
+                _vertexBuffer[i] = new Vector2(
                     cx + Mathf.Cos(angle) * r,
                     cy + Mathf.Sin(angle) * r);
             }
 
             // Blank move to first vertex
-            points.Add(LaserPoint.Blanked(vertices[0].X, vertices[0].Y));
+            output.Add(LaserPoint.Blanked(_vertexBuffer[0].X, _vertexBuffer[0].Y));
 
             // Draw star outline
             for (int i = 0; i < totalVertices; i++)
             {
-                Vector2 from = vertices[i];
-                Vector2 to = vertices[(i + 1) % totalVertices];
+                Vector2 from = _vertexBuffer[i];
+                Vector2 to = _vertexBuffer[(i + 1) % totalVertices];
 
                 for (int p = 0; p <= PointsPerEdge; p++)
                 {
                     float t = (float)p / PointsPerEdge;
                     float px = Mathf.Lerp(from.X, to.X, t);
                     float py = Mathf.Lerp(from.Y, to.Y, t);
-                    points.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
+                    output.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
                 }
             }
-
-            return points;
         }
     }
 }

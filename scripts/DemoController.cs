@@ -17,6 +17,7 @@ public partial class DemoController : Node
     [Export] public float BeatDecay = 0.9f;
 
     private LaserPreviewRenderer[] _renderers;
+    private List<LaserPoint> _demoPoints = new List<LaserPoint>(256);
     private Dictionary<LaserPatternType, ILaserPattern> _patterns;
     private LaserPatternType[] _patternOrder;
     private int _currentPatternIndex;
@@ -189,8 +190,9 @@ public partial class DemoController : Node
                 )
             };
 
-            List<LaserPoint> points = pattern.Generate(time, parameters);
-            _renderers[i].RenderFrame(points);
+            _demoPoints.Clear();
+            pattern.Generate(time, parameters, _demoPoints);
+            _renderers[i].RenderFrame(_demoPoints);
         }
     }
 

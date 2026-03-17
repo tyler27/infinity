@@ -27,9 +27,8 @@ namespace LazerSystem.Patterns
         // A stroke is (x1, y1, x2, y2) in normalized 0-1 character space.
         private static readonly Dictionary<char, float[][]> Font = BuildFont();
 
-        public List<LaserPoint> Generate(float time, PatternParameters parameters)
+        public void Generate(float time, PatternParameters parameters, List<LaserPoint> output)
         {
-            var points = new List<LaserPoint>();
             Color c = parameters.EffectiveColor();
             float charWidth = parameters.size * 0.3f;
             float charHeight = parameters.size * 0.5f;
@@ -39,7 +38,7 @@ namespace LazerSystem.Patterns
             float cy = parameters.position.Y;
 
             string text = _text;
-            if (string.IsNullOrEmpty(text)) return points;
+            if (string.IsNullOrEmpty(text)) return;
 
             float totalWidth = text.Length * spacing - (spacing - charWidth);
             float startX = -totalWidth * 0.5f;
@@ -71,7 +70,7 @@ namespace LazerSystem.Patterns
                     float ry2 = lx2 * sinA + ly2 * cosA + cy;
 
                     // Blank to start of stroke
-                    points.Add(LaserPoint.Blanked(rx1, ry1));
+                    output.Add(LaserPoint.Blanked(rx1, ry1));
 
                     // Draw stroke
                     for (int p = 0; p <= PointsPerStroke; p++)
@@ -79,12 +78,10 @@ namespace LazerSystem.Patterns
                         float t = (float)p / PointsPerStroke;
                         float px = Mathf.Lerp(rx1, rx2, t);
                         float py = Mathf.Lerp(ry1, ry2, t);
-                        points.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
+                        output.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
                     }
                 }
             }
-
-            return points;
         }
 
         private static Dictionary<char, float[][]> BuildFont()

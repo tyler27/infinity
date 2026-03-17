@@ -36,6 +36,23 @@ namespace LazerSystem.Patterns
         }
 
         /// <summary>
+        /// Copies values from a LaserCue into this instance (no allocation).
+        /// </summary>
+        public void CopyFromCue(LaserCue cue)
+        {
+            color = cue.Color;
+            intensity = cue.Intensity;
+            size = cue.Size;
+            rotation = cue.Rotation;
+            speed = cue.Speed;
+            spread = cue.Spread;
+            count = cue.Count;
+            frequency = cue.Frequency;
+            amplitude = cue.Amplitude;
+            position = cue.Position;
+        }
+
+        /// <summary>
         /// Creates PatternParameters from a LaserCue Resource.
         /// </summary>
         public static PatternParameters FromCue(LaserCue cue)

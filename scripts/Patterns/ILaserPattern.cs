@@ -6,6 +6,10 @@ namespace LazerSystem.Patterns
     public interface ILaserPattern
     {
         string PatternName { get; }
-        List<LaserPoint> Generate(float time, PatternParameters parameters);
+
+        /// <summary>
+        /// Generates pattern points into the provided list (cleared by caller).
+        /// </summary>
+        void Generate(float time, PatternParameters parameters, List<LaserPoint> output);
     }
 }

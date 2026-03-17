@@ -12,11 +12,10 @@ namespace LazerSystem.Patterns
     {
         public string PatternName => "Circle";
 
-        private const int PointCount = 64;
+        private const int PointCount = 48;
 
-        public List<LaserPoint> Generate(float time, PatternParameters parameters)
+        public void Generate(float time, PatternParameters parameters, List<LaserPoint> output)
         {
-            var points = new List<LaserPoint>();
             Color c = parameters.EffectiveColor();
             float radius = parameters.size;
             float rotationOffset = Mathf.DegToRad(parameters.rotation) + time * parameters.speed;
@@ -31,7 +30,7 @@ namespace LazerSystem.Patterns
             float startAngle = rotationOffset;
             float startX = cx + Mathf.Cos(startAngle) * animatedRadius;
             float startY = cy + Mathf.Sin(startAngle) * animatedRadius;
-            points.Add(LaserPoint.Blanked(startX, startY));
+            output.Add(LaserPoint.Blanked(startX, startY));
 
             // Draw circle outline
             for (int i = 0; i <= PointCount; i++)
@@ -40,10 +39,8 @@ namespace LazerSystem.Patterns
                 float angle = rotationOffset + t * Mathf.Pi * 2f;
                 float px = cx + Mathf.Cos(angle) * animatedRadius;
                 float py = cy + Mathf.Sin(angle) * animatedRadius;
-                points.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
+                output.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
             }
-
-            return points;
         }
     }
 }

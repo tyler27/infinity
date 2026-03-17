@@ -11,21 +11,18 @@ namespace LazerSystem.Patterns
     {
         public string PatternName => "Beam";
 
-        public List<LaserPoint> Generate(float time, PatternParameters parameters)
+        public void Generate(float time, PatternParameters parameters, List<LaserPoint> output)
         {
-            var points = new List<LaserPoint>();
             Color c = parameters.EffectiveColor();
 
             // Blanking move to position
-            points.Add(LaserPoint.Blanked(parameters.position.X, parameters.position.Y));
+            output.Add(LaserPoint.Blanked(parameters.position.X, parameters.position.Y));
 
             // Single visible point at position
-            points.Add(LaserPoint.Colored(
+            output.Add(LaserPoint.Colored(
                 parameters.position.X,
                 parameters.position.Y,
                 c.R, c.G, c.B));
-
-            return points;
         }
     }
 }

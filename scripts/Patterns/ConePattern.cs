@@ -12,11 +12,10 @@ namespace LazerSystem.Patterns
 	{
 		public string PatternName => "Cone";
 
-		private const int PointsPerBeam = 12;
+		private const int PointsPerBeam = 8;
 
-		public List<LaserPoint> Generate(float time, PatternParameters parameters)
+		public void Generate(float time, PatternParameters parameters, List<LaserPoint> output)
 		{
-			var points = new List<LaserPoint>();
 			Color c = parameters.EffectiveColor();
 			int beamCount = Mathf.Max(3, parameters.count);
 			float rotationOffset = Mathf.DegToRad(parameters.rotation) + time * parameters.speed;
@@ -31,7 +30,7 @@ namespace LazerSystem.Patterns
 				float dy = Mathf.Sin(angle);
 
 				// Blank move to center
-				points.Add(LaserPoint.Blanked(cx, cy));
+				output.Add(LaserPoint.Blanked(cx, cy));
 
 				// Draw beam outward
 				for (int p = 0; p < PointsPerBeam; p++)
@@ -39,11 +38,9 @@ namespace LazerSystem.Patterns
 					float frac = (float)p / (PointsPerBeam - 1);
 					float px = cx + dx * length * frac;
 					float py = cy + dy * length * frac;
-					points.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
+					output.Add(LaserPoint.Colored(px, py, c.R, c.G, c.B));
 				}
 			}
-
-			return points;
 		}
 	}
 }
