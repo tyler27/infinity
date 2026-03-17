@@ -8,7 +8,8 @@ The software generates laser patterns in real time, renders them in a 3D preview
 
 ## Screenshots
 
-_Screenshots coming soon._
+<img width="2559" height="1401" alt="image" src="https://github.com/user-attachments/assets/2c7f65d0-248f-4d2b-92e3-9ca0936fd052" />
+
 
 ---
 
