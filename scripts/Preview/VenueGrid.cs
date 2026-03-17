@@ -65,25 +65,19 @@ namespace LazerSystem.Preview
             // Read projector positions from scene
             var preview3D = GetParent();
             Vector3[] projPositions = new Vector3[4];
-            float maxBeamLen = 20f;
 
             for (int i = 0; i < 4; i++)
             {
                 var projNode = preview3D?.GetNodeOrNull<Node3D>($"Projector{i + 1}");
                 if (projNode != null)
-                {
-                    projPositions[i] = projNode.Position;
-                    var renderer = projNode as LaserPreviewRenderer;
-                    if (renderer != null)
-                        maxBeamLen = renderer.MaxBeamLength;
-                }
+                    projPositions[i] = projNode.GlobalPosition;
                 else
-                {
                     projPositions[i] = new Vector3((i - 1.5f) * 2f, 4f, 0f);
-                }
             }
 
-            float wallZ = -maxBeamLen;
+            // Venue is a fixed size — independent of render distance
+            float venueDepth = 25f;
+            float wallZ = -venueDepth;
             float avgY = 0;
             float minX = float.MaxValue, maxX = float.MinValue;
             foreach (var p in projPositions)
@@ -97,7 +91,7 @@ namespace LazerSystem.Preview
             _mesh.SurfaceBegin(Mesh.PrimitiveType.Triangles);
 
             // ── Ground plane grid (y=0) ──
-            float groundExtent = Mathf.Max(maxBeamLen * 1.2f, 20f);
+            float groundExtent = 20f;
             float step = 2f;
             for (float x = -groundExtent; x <= groundExtent; x += step)
             {
@@ -148,8 +142,8 @@ namespace LazerSystem.Preview
             }
 
             // ── Back wall outline ──
-            float wallHalfW = maxBeamLen * 0.6f;
-            float wallHalfH = maxBeamLen * 0.4f;
+            float wallHalfW = 12f;
+            float wallHalfH = 10f;
             float wallCenterY = avgY;
 
             Vector3 wTL = new Vector3(-wallHalfW, wallCenterY + wallHalfH, wallZ);

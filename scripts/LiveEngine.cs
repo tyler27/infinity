@@ -248,6 +248,32 @@ public partial class LiveEngine : Node
 			}
 		}
 
+		// Append zone boundary points when enabled (treated as real laser output)
+		for (int i = 0; i < ProjectorCount; i++)
+		{
+			if (_renderers[i] != null && _renderers[i].ShowZoneBoundary)
+			{
+				// Find the zone's keystone corners for this projector
+				Vector2[] corners = null;
+				var zoneManager = LazerSystem.Zones.ZoneManager.Instance;
+				if (zoneManager != null)
+				{
+					var zoneIndices = zoneManager.GetZonesForProjector(i);
+					if (zoneIndices.Count > 0 && zoneManager.Zones[zoneIndices[0]] != null)
+					{
+						corners = zoneManager.Zones[zoneIndices[0]].KeystoneCorners;
+					}
+				}
+
+				var boundaryPts = _renderers[i].GenerateZoneBoundaryPoints(corners);
+				if (boundaryPts != null && boundaryPts.Count > 0)
+				{
+					_projectorHasOutput[i] = true;
+					_projectorPoints[i].AddRange(boundaryPts);
+				}
+			}
+		}
+
 		// Render and send DMX for each projector
 		for (int i = 0; i < ProjectorCount; i++)
 		{

@@ -5,13 +5,17 @@ using LazerSystem.Core;
 namespace LazerSystem.Preview
 {
     /// <summary>
-    /// Renders laser beams and per-projector zone boundary in 3D.
+    /// Renders laser beams in 3D. Zone boundary is now generated as LaserPoints
+    /// and fed through the same rendering pipeline as pattern output.
     /// </summary>
     public partial class LaserPreviewRenderer : Node3D
     {
         [ExportGroup("Beam Settings")]
         [Export] public float BeamWidth = 0.03f;
-        [Export] public float MaxBeamLength = 20f;
+        /// <summary>Full scan angle in degrees (galvo FOV). Typical FB4 is 40-60°.</summary>
+        [Export] public float ScanAngleDeg = 50f;
+        /// <summary>Maximum ray distance if no surface is hit.</summary>
+        private const float MaxRayDistance = 100f;
 
         [ExportGroup("Fog / Haze")]
         [Export] public float HazeIntensity = 2f;
@@ -32,12 +36,10 @@ namespace LazerSystem.Preview
         private MeshInstance3D _sourceMeshInstance;
         private StandardMaterial3D _sourceMaterial;
 
-        private ImmediateMesh _zoneMesh;
-        private MeshInstance3D _zoneMeshInstance;
-        private StandardMaterial3D _zoneMaterial;
-
         private bool _showZoneBoundary;
-        private bool _zoneDirty = true;
+
+        /// <summary>Whether zone boundary is enabled for this projector.</summary>
+        public bool ShowZoneBoundary => _showZoneBoundary;
 
         public override void _Ready()
         {
@@ -46,6 +48,7 @@ namespace LazerSystem.Preview
             _beamMeshInstance = new MeshInstance3D();
             _beamMeshInstance.Mesh = _beamMesh;
             _beamMeshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
+            _beamMeshInstance.TopLevel = true; // Don't inherit parent transform — we use world coords
 
             _beamMaterial = new StandardMaterial3D();
             _beamMaterial.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
@@ -62,6 +65,7 @@ namespace LazerSystem.Preview
             _sourceMeshInstance = new MeshInstance3D();
             _sourceMeshInstance.Mesh = _sourceMesh;
             _sourceMeshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
+            _sourceMeshInstance.TopLevel = true; // Don't inherit parent transform — we use world coords
             _sourceMeshInstance.Visible = false;
 
             _sourceMaterial = new StandardMaterial3D();
@@ -73,52 +77,115 @@ namespace LazerSystem.Preview
             _sourceMaterial.Transparency = BaseMaterial3D.TransparencyEnum.Alpha;
             _sourceMeshInstance.MaterialOverride = _sourceMaterial;
             AddChild(_sourceMeshInstance);
-
-            // Zone boundary mesh (alpha blend, no additive)
-            _zoneMesh = new ImmediateMesh();
-            _zoneMeshInstance = new MeshInstance3D();
-            _zoneMeshInstance.Mesh = _zoneMesh;
-            _zoneMeshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
-            _zoneMeshInstance.Visible = false;
-
-            _zoneMaterial = new StandardMaterial3D();
-            _zoneMaterial.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
-            _zoneMaterial.VertexColorUseAsAlbedo = true;
-            _zoneMaterial.NoDepthTest = true;
-            _zoneMaterial.CullMode = BaseMaterial3D.CullModeEnum.Disabled;
-            _zoneMaterial.Transparency = BaseMaterial3D.TransparencyEnum.Alpha;
-            _zoneMeshInstance.MaterialOverride = _zoneMaterial;
-            AddChild(_zoneMeshInstance);
         }
 
         /// <summary>Toggle zone boundary visibility for this projector.</summary>
         public void SetShowZoneBoundary(bool show)
         {
-            if (show == _showZoneBoundary) return;
             _showZoneBoundary = show;
-            _zoneMeshInstance.Visible = show;
-            if (show) _zoneDirty = true;
         }
 
         /// <summary>Set the zone color (matches projector color).</summary>
         public void SetZoneColor(Color color)
         {
             ZoneColor = color;
-            _zoneDirty = true;
         }
 
-        /// <summary>Force rebuild of zone boundary (call when zone config changes).</summary>
-        public void MarkZoneDirty()
+        /// <summary>
+        /// Generates zone boundary as LaserPoints in scan space.
+        /// The boundary traces the zone's keystone corners, so it represents exactly
+        /// what the real projector would output. Points go through the same
+        /// rendering/ArtNet pipeline as pattern output.
+        /// </summary>
+        /// <param name="corners">
+        /// Four keystone corners in scan space: [0]=BL, [1]=BR, [2]=TR, [3]=TL.
+        /// If null, defaults to the full -1..1 scan area.
+        /// </param>
+        public List<LaserPoint> GenerateZoneBoundaryPoints(Vector2[] corners = null)
         {
-            _zoneDirty = true;
-        }
+            // Default to full scan area if no keystone corners provided
+            Vector2 bl = corners != null && corners.Length == 4 ? corners[0] : new Vector2(-1f, -1f);
+            Vector2 br = corners != null && corners.Length == 4 ? corners[1] : new Vector2( 1f, -1f);
+            Vector2 tr = corners != null && corners.Length == 4 ? corners[2] : new Vector2( 1f,  1f);
+            Vector2 tl = corners != null && corners.Length == 4 ? corners[3] : new Vector2(-1f,  1f);
 
-        public override void _Process(double delta)
-        {
-            if (_showZoneBoundary && _zoneDirty)
+            var pts = new List<LaserPoint>(200);
+            float r = ZoneColor.R;
+            float g = ZoneColor.G;
+            float b = ZoneColor.B;
+
+            // Dimmer color for grid lines
+            float gr = r * 0.4f;
+            float gg = g * 0.4f;
+            float gb = b * 0.4f;
+
+            int steps = 20; // points per line segment for smooth rendering
+
+            // ── Outer boundary (trace the keystone quad) ──
+            AddScanLine(pts, bl.X, bl.Y, br.X, br.Y, r, g, b, steps); // bottom
+            AddScanLine(pts, br.X, br.Y, tr.X, tr.Y, r, g, b, steps); // right
+            AddScanLine(pts, tr.X, tr.Y, tl.X, tl.Y, r, g, b, steps); // top
+            AddScanLine(pts, tl.X, tl.Y, bl.X, bl.Y, r, g, b, steps); // left
+
+            // ── Grid lines interpolated across the keystone quad ──
+            // Use bilinear interpolation so grid lines follow the keystone warp
+            int gridDivs = 4; // 4 divisions = lines at 0.25, 0.5, 0.75
+            for (int i = 1; i < gridDivs; i++)
             {
-                _zoneDirty = false;
-                RebuildZoneBoundary();
+                float t = (float)i / gridDivs;
+                // Horizontal line: lerp left edge and right edge at parameter t
+                Vector2 left = bl.Lerp(tl, t);
+                Vector2 right = br.Lerp(tr, t);
+                AddScanLine(pts, left.X, left.Y, right.X, right.Y, gr, gg, gb, steps);
+                // Vertical line: lerp bottom edge and top edge at parameter t
+                Vector2 bottom = bl.Lerp(br, t);
+                Vector2 top = tl.Lerp(tr, t);
+                AddScanLine(pts, bottom.X, bottom.Y, top.X, top.Y, gr, gg, gb, steps);
+            }
+
+            // ── Center crosshair ──
+            Vector2 center = (bl + br + tr + tl) * 0.25f;
+            // Cross arms along the quad's edge directions
+            Vector2 hDir = ((br - bl) + (tr - tl)).Normalized() * 0.08f;
+            Vector2 vDir = ((tl - bl) + (tr - br)).Normalized() * 0.08f;
+            AddScanLine(pts, center.X - hDir.X, center.Y - hDir.Y,
+                             center.X + hDir.X, center.Y + hDir.Y, r, g, b, 6);
+            AddScanLine(pts, center.X - vDir.X, center.Y - vDir.Y,
+                             center.X + vDir.X, center.Y + vDir.Y, r, g, b, 6);
+
+            // ── Corner brackets (follow the edges of the keystone quad) ──
+            float bFrac = 0.1f; // bracket = 10% of each edge
+            // BL corner
+            AddScanLine(pts, bl.X, bl.Y, bl.Lerp(br, bFrac).X, bl.Lerp(br, bFrac).Y, r, g, b, 4);
+            AddScanLine(pts, bl.X, bl.Y, bl.Lerp(tl, bFrac).X, bl.Lerp(tl, bFrac).Y, r, g, b, 4);
+            // BR corner
+            AddScanLine(pts, br.X, br.Y, br.Lerp(bl, bFrac).X, br.Lerp(bl, bFrac).Y, r, g, b, 4);
+            AddScanLine(pts, br.X, br.Y, br.Lerp(tr, bFrac).X, br.Lerp(tr, bFrac).Y, r, g, b, 4);
+            // TR corner
+            AddScanLine(pts, tr.X, tr.Y, tr.Lerp(tl, bFrac).X, tr.Lerp(tl, bFrac).Y, r, g, b, 4);
+            AddScanLine(pts, tr.X, tr.Y, tr.Lerp(br, bFrac).X, tr.Lerp(br, bFrac).Y, r, g, b, 4);
+            // TL corner
+            AddScanLine(pts, tl.X, tl.Y, tl.Lerp(tr, bFrac).X, tl.Lerp(tr, bFrac).Y, r, g, b, 4);
+            AddScanLine(pts, tl.X, tl.Y, tl.Lerp(bl, bFrac).X, tl.Lerp(bl, bFrac).Y, r, g, b, 4);
+
+            return pts;
+        }
+
+        /// <summary>
+        /// Adds a line segment as LaserPoints with a blanked move to the start.
+        /// </summary>
+        private static void AddScanLine(List<LaserPoint> pts, float x0, float y0, float x1, float y1,
+            float r, float g, float b, int steps)
+        {
+            // Blank move to start
+            pts.Add(LaserPoint.Blanked(x0, y0));
+
+            for (int i = 0; i <= steps; i++)
+            {
+                float t = (float)i / steps;
+                float x = x0 + (x1 - x0) * t;
+                float y = y0 + (y1 - y0) * t;
+                pts.Add(new LaserPoint(x, y, r, g, b, false));
             }
         }
 
@@ -235,13 +302,6 @@ namespace LazerSystem.Preview
             if (!show) _sourceMesh?.ClearSurfaces();
         }
 
-        /// <summary>Set the projection distance (how far the wall is).</summary>
-        public void SetProjectionDistance(float distance)
-        {
-            MaxBeamLength = Mathf.Clamp(distance, 5f, 100f);
-            _zoneDirty = true;
-        }
-
         private void AddSourceBeamLine(Vector3 a, Vector3 b, Color colorA, Color colorB, float width)
         {
             Vector3 dir = (b - a);
@@ -280,96 +340,81 @@ namespace LazerSystem.Preview
 
         private Vector3 LaserPointToWorld(LaserPoint pt)
         {
-            Vector3 localTarget = new Vector3(pt.x * MaxBeamLength * 0.5f, pt.y * MaxBeamLength * 0.5f, -MaxBeamLength);
-            return GlobalTransform * localTarget;
-        }
-
-        private Vector3 ZoneCornerToWorld(float x, float y)
-        {
-            Vector3 localTarget = new Vector3(x * MaxBeamLength * 0.5f, y * MaxBeamLength * 0.5f, -MaxBeamLength);
-            return GlobalTransform * localTarget;
+            return ScanPointToWorld(pt.x, pt.y);
         }
 
         /// <summary>
-        /// Draws the zone boundary for this specific projector.
-        /// Shows the -1..1 scan area boundary, grid, and corner brackets.
-        /// Uses this projector's ZoneColor.
+        /// Maps a normalized scan coordinate (-1..1) to a world-space point.
+        /// Uses the scan angle (galvo FOV) to compute a beam direction,
+        /// then raycasts against venue surfaces (back wall, floor, ceiling, side walls).
+        /// Beam terminates where it hits — like a real laser.
         /// </summary>
-        private void RebuildZoneBoundary()
+        private Vector3 ScanPointToWorld(float scanX, float scanY)
         {
-            _zoneMesh.ClearSurfaces();
+            // Convert scan coordinates to galvo angles
+            float halfAngleRad = Mathf.DegToRad(ScanAngleDeg * 0.5f);
+            float angleX = scanX * halfAngleRad;
+            float angleY = scanY * halfAngleRad;
 
-            Color borderColor = ZoneColor;
-            Color gridColor = new Color(ZoneColor.R * 0.3f, ZoneColor.G * 0.3f, ZoneColor.B * 0.3f, 0.2f);
-            float borderWidth = 0.04f;
-            float gridWidth = 0.02f;
+            // Build local direction from angles (beam shoots along local -Z)
+            Vector3 localDir = new Vector3(
+                Mathf.Tan(angleX),
+                Mathf.Tan(angleY),
+                -1f
+            ).Normalized();
 
-            _zoneMesh.SurfaceBegin(Mesh.PrimitiveType.Triangles);
+            // Transform direction to world space
+            Vector3 worldOrigin = GlobalPosition;
+            Vector3 worldDir = GlobalTransform.Basis * localDir;
 
-            // Grid lines at 0.5 intervals
-            for (int i = -2; i <= 2; i++)
-            {
-                float norm = i * 0.5f;
-                AddZoneLine(ZoneCornerToWorld(-1f, norm), ZoneCornerToWorld(1f, norm), gridColor, gridWidth);
-                AddZoneLine(ZoneCornerToWorld(norm, -1f), ZoneCornerToWorld(norm, 1f), gridColor, gridWidth);
-            }
+            // Raycast against venue surfaces — find nearest hit
+            float nearest = MaxRayDistance;
 
-            // Outer boundary
-            Vector3 tl = ZoneCornerToWorld(-1f,  1f);
-            Vector3 tr = ZoneCornerToWorld( 1f,  1f);
-            Vector3 br = ZoneCornerToWorld( 1f, -1f);
-            Vector3 bl = ZoneCornerToWorld(-1f, -1f);
+            // Back wall: z = -25
+            float hitDist = RayPlaneZ(worldOrigin, worldDir, -25f);
+            if (hitDist > 0 && hitDist < nearest) nearest = hitDist;
 
-            AddZoneLine(tl, tr, borderColor, borderWidth);
-            AddZoneLine(tr, br, borderColor, borderWidth);
-            AddZoneLine(br, bl, borderColor, borderWidth);
-            AddZoneLine(bl, tl, borderColor, borderWidth);
+            // Floor: y = 0
+            hitDist = RayPlaneY(worldOrigin, worldDir, 0f);
+            if (hitDist > 0 && hitDist < nearest) nearest = hitDist;
 
-            // Corner brackets
-            float bracketLen = 1.2f;
-            float bw = borderWidth * 1.5f;
-            AddZoneLine(tl, tl + new Vector3(bracketLen, 0, 0), borderColor, bw);
-            AddZoneLine(tl, tl + new Vector3(0, -bracketLen, 0), borderColor, bw);
-            AddZoneLine(tr, tr + new Vector3(-bracketLen, 0, 0), borderColor, bw);
-            AddZoneLine(tr, tr + new Vector3(0, -bracketLen, 0), borderColor, bw);
-            AddZoneLine(br, br + new Vector3(-bracketLen, 0, 0), borderColor, bw);
-            AddZoneLine(br, br + new Vector3(0, bracketLen, 0), borderColor, bw);
-            AddZoneLine(bl, bl + new Vector3(bracketLen, 0, 0), borderColor, bw);
-            AddZoneLine(bl, bl + new Vector3(0, bracketLen, 0), borderColor, bw);
+            // Ceiling: y = 15
+            hitDist = RayPlaneY(worldOrigin, worldDir, 15f);
+            if (hitDist > 0 && hitDist < nearest) nearest = hitDist;
 
-            // Center crosshair
-            float crossLen = 0.5f;
-            Vector3 c = ZoneCornerToWorld(0, 0);
-            AddZoneLine(c - new Vector3(crossLen, 0, 0), c + new Vector3(crossLen, 0, 0), borderColor, gridWidth * 1.5f);
-            AddZoneLine(c - new Vector3(0, crossLen, 0), c + new Vector3(0, crossLen, 0), borderColor, gridWidth * 1.5f);
+            // Left wall: x = -20
+            hitDist = RayPlaneX(worldOrigin, worldDir, -20f);
+            if (hitDist > 0 && hitDist < nearest) nearest = hitDist;
 
-            _zoneMesh.SurfaceEnd();
+            // Right wall: x = 20
+            hitDist = RayPlaneX(worldOrigin, worldDir, 20f);
+            if (hitDist > 0 && hitDist < nearest) nearest = hitDist;
+
+            return worldOrigin + worldDir * nearest;
         }
 
-        private void AddZoneLine(Vector3 a, Vector3 b, Color color, float width)
+        /// <summary>Ray-plane intersection for a plane at z = planeZ. Returns distance or -1.</summary>
+        private static float RayPlaneZ(Vector3 origin, Vector3 dir, float planeZ)
         {
-            Vector3 dir = (b - a);
-            if (dir.LengthSquared() < 0.0001f) return;
-            dir = dir.Normalized();
+            if (Mathf.Abs(dir.Z) < 0.0001f) return -1f;
+            float t = (planeZ - origin.Z) / dir.Z;
+            return t > 0.001f ? t : -1f;
+        }
 
-            Vector3 forward = new Vector3(0, 0, 1);
-            Vector3 side = dir.Cross(forward).Normalized() * width;
-            if (side.LengthSquared() < 0.0001f)
-                side = dir.Cross(Vector3.Up).Normalized() * width;
+        /// <summary>Ray-plane intersection for a plane at y = planeY. Returns distance or -1.</summary>
+        private static float RayPlaneY(Vector3 origin, Vector3 dir, float planeY)
+        {
+            if (Mathf.Abs(dir.Y) < 0.0001f) return -1f;
+            float t = (planeY - origin.Y) / dir.Y;
+            return t > 0.001f ? t : -1f;
+        }
 
-            _zoneMesh.SurfaceSetColor(color);
-            _zoneMesh.SurfaceAddVertex(a - side);
-            _zoneMesh.SurfaceSetColor(color);
-            _zoneMesh.SurfaceAddVertex(a + side);
-            _zoneMesh.SurfaceSetColor(color);
-            _zoneMesh.SurfaceAddVertex(b + side);
-
-            _zoneMesh.SurfaceSetColor(color);
-            _zoneMesh.SurfaceAddVertex(a - side);
-            _zoneMesh.SurfaceSetColor(color);
-            _zoneMesh.SurfaceAddVertex(b + side);
-            _zoneMesh.SurfaceSetColor(color);
-            _zoneMesh.SurfaceAddVertex(b - side);
+        /// <summary>Ray-plane intersection for a plane at x = planeX. Returns distance or -1.</summary>
+        private static float RayPlaneX(Vector3 origin, Vector3 dir, float planeX)
+        {
+            if (Mathf.Abs(dir.X) < 0.0001f) return -1f;
+            float t = (planeX - origin.X) / dir.X;
+            return t > 0.001f ? t : -1f;
         }
     }
 }

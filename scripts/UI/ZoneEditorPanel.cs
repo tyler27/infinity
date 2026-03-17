@@ -598,7 +598,6 @@ public partial class ZoneEditorPanel : FloatingPanel
         {
             renderer.SetShowZoneBoundary(_showingBoundary);
             renderer.SetZoneColor(GetProjectorColor(zone.ProjectorIndex));
-            renderer.MarkZoneDirty();
         }
     }
 
@@ -621,7 +620,6 @@ public partial class ZoneEditorPanel : FloatingPanel
             {
                 renderer.SetShowZoneBoundary(_showingAllBoundaries);
                 renderer.SetZoneColor(GetProjectorColor(i));
-                renderer.MarkZoneDirty();
             }
         }
     }

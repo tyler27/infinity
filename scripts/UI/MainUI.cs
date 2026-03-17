@@ -754,52 +754,10 @@ public partial class MainUI : CanvasLayer
         };
         vbox.AddChild(beamToggle);
 
-        // ── Projection Distance slider ──
-        var distRow = new HBoxContainer();
-        distRow.AddThemeConstantOverride("separation", 6);
-        vbox.AddChild(distRow);
 
-        var distLabel = new Label();
-        distLabel.Text = "Proj Distance";
-        distLabel.CustomMinimumSize = new Vector2(90, 0);
-        distLabel.AddThemeColorOverride("font_color", TextColor);
-        distLabel.AddThemeFontSizeOverride("font_size", 11);
-        distRow.AddChild(distLabel);
-
-        var distSlider = new HSlider();
-        distSlider.MinValue = 5;
-        distSlider.MaxValue = 60;
-        distSlider.Value = 20;
-        distSlider.Step = 1;
-        distSlider.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-        distSlider.CustomMinimumSize = new Vector2(0, 20);
-        distRow.AddChild(distSlider);
-
-        var distValue = new Label();
-        distValue.Text = "20m";
-        distValue.CustomMinimumSize = new Vector2(35, 0);
-        distValue.AddThemeColorOverride("font_color", TextColor);
-        distValue.AddThemeFontSizeOverride("font_size", 11);
-        distRow.AddChild(distValue);
-
-        distSlider.ValueChanged += (val) =>
-        {
-            distValue.Text = $"{(int)val}m";
-            var preview3D = GetTree().Root.FindChild("Preview3D", true, false);
-            if (preview3D == null) return;
-            for (int i = 0; i < 4; i++)
-            {
-                var r = preview3D.GetNodeOrNull<LazerSystem.Preview.LaserPreviewRenderer>($"Projector{i + 1}");
-                r?.SetProjectionDistance((float)val);
-            }
-            // Rebuild venue grid
-            var venueGrid = preview3D.GetNodeOrNull<LazerSystem.Preview.VenueGrid>("VenueGrid");
-            venueGrid?.MarkDirty();
-        };
-
-        // ── Projector Positions ──
+        // ── Projector Positions & Rotation ──
         var posHeader = new Label();
-        posHeader.Text = "Projector Positions";
+        posHeader.Text = "Projector Transform";
         posHeader.AddThemeColorOverride("font_color", ActiveGreen);
         posHeader.AddThemeFontSizeOverride("font_size", 11);
         vbox.AddChild(posHeader);
@@ -811,61 +769,63 @@ public partial class MainUI : CanvasLayer
             new Color(0.3f, 0.5f, 0.9f, 1f),
             new Color(0.9f, 0.85f, 0.3f, 1f)
         };
+        float[] defaultX = { -3f, -1f, 1f, 3f };
 
         for (int i = 0; i < 4; i++)
         {
             int idx = i;
-            var projRow = new HBoxContainer();
-            projRow.AddThemeConstantOverride("separation", 4);
-            vbox.AddChild(projRow);
 
+            // Projector label
             var pLabel = new Label();
             pLabel.Text = projNames[i];
-            pLabel.CustomMinimumSize = new Vector2(24, 0);
             pLabel.AddThemeColorOverride("font_color", projColors[i]);
             pLabel.AddThemeFontSizeOverride("font_size", 11);
-            projRow.AddChild(pLabel);
+            vbox.AddChild(pLabel);
 
-            // X position
-            var xLabel = new Label();
-            xLabel.Text = "X";
-            xLabel.AddThemeColorOverride("font_color", DimText);
-            xLabel.AddThemeFontSizeOverride("font_size", 10);
-            projRow.AddChild(xLabel);
+            // Position row: X Y Z
+            var posRow = new HBoxContainer();
+            posRow.AddThemeConstantOverride("separation", 3);
+            vbox.AddChild(posRow);
 
-            float defaultX = (i - 1.5f) * 2f; // -3, -1, 1, 3
-            var xSlider = new HSlider();
-            xSlider.MinValue = -15;
-            xSlider.MaxValue = 15;
-            xSlider.Value = defaultX;
-            xSlider.Step = 0.5;
-            xSlider.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-            xSlider.CustomMinimumSize = new Vector2(0, 18);
-            projRow.AddChild(xSlider);
+            AddAxisSlider(posRow, "X", -20, 20, defaultX[i], 0.5, (val) => UpdateProjectorTransform(idx, posX: (float)val));
+            AddAxisSlider(posRow, "Y", 0, 15, 4, 0.5, (val) => UpdateProjectorTransform(idx, posY: (float)val));
+            AddAxisSlider(posRow, "Z", -20, 20, 0, 0.5, (val) => UpdateProjectorTransform(idx, posZ: (float)val));
 
-            // Y position
-            var yLabel = new Label();
-            yLabel.Text = "Y";
-            yLabel.AddThemeColorOverride("font_color", DimText);
-            yLabel.AddThemeFontSizeOverride("font_size", 10);
-            projRow.AddChild(yLabel);
-
-            var ySlider = new HSlider();
-            ySlider.MinValue = 0;
-            ySlider.MaxValue = 15;
-            ySlider.Value = 4;
-            ySlider.Step = 0.5;
-            ySlider.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-            ySlider.CustomMinimumSize = new Vector2(0, 18);
-            projRow.AddChild(ySlider);
-
-            // Wire up
-            xSlider.ValueChanged += (val) => UpdateProjectorPosition(idx, (float)val, null);
-            ySlider.ValueChanged += (val) => UpdateProjectorPosition(idx, null, (float)val);
+            // Rotation removed for now — focus on position first
         }
     }
 
-    private void UpdateProjectorPosition(int projectorIndex, float? newX, float? newY)
+    private void AddAxisSlider(HBoxContainer parent, string label, double min, double max, double defaultVal, double step, HSlider.ValueChangedEventHandler handler)
+    {
+        bool isRot = label.StartsWith("R");
+        Color labelColor = label.Contains("X") ? new Color(0.8f, 0.3f, 0.3f, 0.8f) :
+                           label.Contains("Y") ? new Color(0.3f, 0.8f, 0.3f, 0.8f) :
+                                                 new Color(0.3f, 0.3f, 0.8f, 0.8f);
+
+        var lbl = new Label();
+        lbl.Text = label;
+        lbl.CustomMinimumSize = new Vector2(isRot ? 22 : 14, 0);
+        lbl.AddThemeColorOverride("font_color", labelColor);
+        lbl.AddThemeFontSizeOverride("font_size", 9);
+        parent.AddChild(lbl);
+
+        var slider = new HSlider();
+        slider.MinValue = min;
+        slider.MaxValue = max;
+        slider.Value = defaultVal;
+        slider.Step = step;
+        slider.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        slider.CustomMinimumSize = new Vector2(0, 16);
+        slider.ValueChanged += handler;
+        parent.AddChild(slider);
+    }
+
+    // Store intended rotation per projector (degrees) to avoid Euler decomposition issues
+    private Vector3[] _projRotDeg = { Vector3.Zero, Vector3.Zero, Vector3.Zero, Vector3.Zero };
+
+    private void UpdateProjectorTransform(int projectorIndex,
+        float? posX = null, float? posY = null, float? posZ = null,
+        float? rotX = null, float? rotY = null, float? rotZ = null)
     {
         var preview3D = GetTree().Root.FindChild("Preview3D", true, false);
         if (preview3D == null) return;
@@ -873,14 +833,15 @@ public partial class MainUI : CanvasLayer
         var projNode = preview3D.GetNodeOrNull<Node3D>($"Projector{projectorIndex + 1}");
         if (projNode == null) return;
 
+        // Position
         Vector3 pos = projNode.Position;
-        if (newX.HasValue) pos.X = newX.Value;
-        if (newY.HasValue) pos.Y = newY.Value;
+        if (posX.HasValue) pos.X = posX.Value;
+        if (posY.HasValue) pos.Y = posY.Value;
+        if (posZ.HasValue) pos.Z = posZ.Value;
         projNode.Position = pos;
 
-        // Rebuild zone boundary if showing
-        var renderer = projNode as LazerSystem.Preview.LaserPreviewRenderer;
-        renderer?.MarkZoneDirty();
+        // Keep rotation at identity (no rotation for now)
+        projNode.Basis = Basis.Identity;
 
         // Rebuild venue grid
         var venueGrid = preview3D.GetNodeOrNull<LazerSystem.Preview.VenueGrid>("VenueGrid");
