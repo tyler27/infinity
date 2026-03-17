@@ -16,8 +16,11 @@ namespace LazerSystem.Preview
         private static readonly Color AxisX = new Color(0.8f, 0.2f, 0.2f, 0.7f);
         private static readonly Color AxisY = new Color(0.2f, 0.8f, 0.2f, 0.7f);
         private static readonly Color AxisZ = new Color(0.2f, 0.2f, 0.8f, 0.7f);
-        private static readonly Color WallColor = new Color(0.08f, 0.08f, 0.1f, 0.15f);
         private static readonly Color ProjectorMarkerColor = new Color(0.5f, 0.5f, 0.6f, 0.6f);
+        private static readonly Color BoundsEdgeColor = new Color(0.9f, 0.5f, 0.1f, 0.6f);
+        private static readonly Color BoundsFillColor = new Color(0.9f, 0.5f, 0.1f, 0.04f);
+
+        private bool _showBounds;
 
         private static readonly Color[] ProjColors = {
             new Color(0.9f, 0.3f, 0.3f, 0.5f),
@@ -58,6 +61,13 @@ namespace LazerSystem.Preview
             _dirty = true;
         }
 
+        /// <summary>Toggle visibility of the raycast boundary surfaces.</summary>
+        public void SetShowBounds(bool show)
+        {
+            _showBounds = show;
+            _dirty = true;
+        }
+
         private void Build()
         {
             _mesh.ClearSurfaces();
@@ -74,19 +84,6 @@ namespace LazerSystem.Preview
                 else
                     projPositions[i] = new Vector3((i - 1.5f) * 2f, 4f, 0f);
             }
-
-            // Venue is a fixed size — independent of render distance
-            float venueDepth = 25f;
-            float wallZ = -venueDepth;
-            float avgY = 0;
-            float minX = float.MaxValue, maxX = float.MinValue;
-            foreach (var p in projPositions)
-            {
-                avgY += p.Y;
-                if (p.X < minX) minX = p.X;
-                if (p.X > maxX) maxX = p.X;
-            }
-            avgY /= 4f;
 
             _mesh.SurfaceBegin(Mesh.PrimitiveType.Triangles);
 
@@ -141,25 +138,65 @@ namespace LazerSystem.Preview
                 }
             }
 
-            // ── Back wall outline ──
-            float wallHalfW = 12f;
-            float wallHalfH = 10f;
-            float wallCenterY = avgY;
 
-            Vector3 wTL = new Vector3(-wallHalfW, wallCenterY + wallHalfH, wallZ);
-            Vector3 wTR = new Vector3(wallHalfW, wallCenterY + wallHalfH, wallZ);
-            Vector3 wBR = new Vector3(wallHalfW, wallCenterY - wallHalfH, wallZ);
-            Vector3 wBL = new Vector3(-wallHalfW, wallCenterY - wallHalfH, wallZ);
+            // ── Raycast boundary surfaces (matches LaserPreviewRenderer hit planes) ──
+            if (_showBounds)
+            {
+                // Boundary dimensions match the raycast planes in LaserPreviewRenderer
+                float bxMin = -20f, bxMax = 20f;
+                float byMin = 0f, byMax = 15f;
+                float bzMin = -25f, bzMax = 0f;
 
-            AddLine(wTL, wTR, WallColor, 0.03f);
-            AddLine(wTR, wBR, WallColor, 0.03f);
-            AddLine(wBR, wBL, WallColor, 0.03f);
-            AddLine(wBL, wTL, WallColor, 0.03f);
+                // Back wall: z = -25
+                AddQuad(
+                    new Vector3(bxMin, byMin, bzMin), new Vector3(bxMax, byMin, bzMin),
+                    new Vector3(bxMax, byMax, bzMin), new Vector3(bxMin, byMax, bzMin),
+                    BoundsFillColor);
+                AddLineLoop(
+                    new Vector3(bxMin, byMin, bzMin), new Vector3(bxMax, byMin, bzMin),
+                    new Vector3(bxMax, byMax, bzMin), new Vector3(bxMin, byMax, bzMin),
+                    BoundsEdgeColor, 0.02f);
 
-            // Floor-to-wall edges
-            var floorWallColor = new Color(0.08f, 0.08f, 0.1f, 0.08f);
-            AddLine(new Vector3(-wallHalfW, 0, 0), wBL, floorWallColor, 0.015f);
-            AddLine(new Vector3(wallHalfW, 0, 0), wBR, floorWallColor, 0.015f);
+                // Floor: y = 0
+                AddQuad(
+                    new Vector3(bxMin, byMin, bzMax), new Vector3(bxMax, byMin, bzMax),
+                    new Vector3(bxMax, byMin, bzMin), new Vector3(bxMin, byMin, bzMin),
+                    BoundsFillColor);
+                AddLineLoop(
+                    new Vector3(bxMin, byMin, bzMax), new Vector3(bxMax, byMin, bzMax),
+                    new Vector3(bxMax, byMin, bzMin), new Vector3(bxMin, byMin, bzMin),
+                    BoundsEdgeColor, 0.02f);
+
+                // Ceiling: y = 15
+                AddQuad(
+                    new Vector3(bxMin, byMax, bzMax), new Vector3(bxMax, byMax, bzMax),
+                    new Vector3(bxMax, byMax, bzMin), new Vector3(bxMin, byMax, bzMin),
+                    BoundsFillColor);
+                AddLineLoop(
+                    new Vector3(bxMin, byMax, bzMax), new Vector3(bxMax, byMax, bzMax),
+                    new Vector3(bxMax, byMax, bzMin), new Vector3(bxMin, byMax, bzMin),
+                    BoundsEdgeColor, 0.02f);
+
+                // Left wall: x = -20
+                AddQuad(
+                    new Vector3(bxMin, byMin, bzMax), new Vector3(bxMin, byMin, bzMin),
+                    new Vector3(bxMin, byMax, bzMin), new Vector3(bxMin, byMax, bzMax),
+                    BoundsFillColor);
+                AddLineLoop(
+                    new Vector3(bxMin, byMin, bzMax), new Vector3(bxMin, byMin, bzMin),
+                    new Vector3(bxMin, byMax, bzMin), new Vector3(bxMin, byMax, bzMax),
+                    BoundsEdgeColor, 0.02f);
+
+                // Right wall: x = 20
+                AddQuad(
+                    new Vector3(bxMax, byMin, bzMax), new Vector3(bxMax, byMin, bzMin),
+                    new Vector3(bxMax, byMax, bzMin), new Vector3(bxMax, byMax, bzMax),
+                    BoundsFillColor);
+                AddLineLoop(
+                    new Vector3(bxMax, byMin, bzMax), new Vector3(bxMax, byMin, bzMin),
+                    new Vector3(bxMax, byMax, bzMin), new Vector3(bxMax, byMax, bzMax),
+                    BoundsEdgeColor, 0.02f);
+            }
 
             _mesh.SurfaceEnd();
         }
@@ -193,6 +230,33 @@ namespace LazerSystem.Preview
             _mesh.SurfaceAddVertex(b + side);
             _mesh.SurfaceSetColor(color);
             _mesh.SurfaceAddVertex(b - side);
+        }
+
+        /// <summary>Draws a filled quad from 4 corners (two triangles).</summary>
+        private void AddQuad(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Color color)
+        {
+            _mesh.SurfaceSetColor(color);
+            _mesh.SurfaceAddVertex(a);
+            _mesh.SurfaceSetColor(color);
+            _mesh.SurfaceAddVertex(b);
+            _mesh.SurfaceSetColor(color);
+            _mesh.SurfaceAddVertex(c);
+
+            _mesh.SurfaceSetColor(color);
+            _mesh.SurfaceAddVertex(a);
+            _mesh.SurfaceSetColor(color);
+            _mesh.SurfaceAddVertex(c);
+            _mesh.SurfaceSetColor(color);
+            _mesh.SurfaceAddVertex(d);
+        }
+
+        /// <summary>Draws 4 edge lines around a quad.</summary>
+        private void AddLineLoop(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Color color, float width)
+        {
+            AddLine(a, b, color, width);
+            AddLine(b, c, color, width);
+            AddLine(c, d, color, width);
+            AddLine(d, a, color, width);
         }
     }
 }

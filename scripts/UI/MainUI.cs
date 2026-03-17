@@ -798,6 +798,20 @@ public partial class MainUI : CanvasLayer
             }
         };
 
+        // ── Venue Bounds toggle ──
+        _boundsToggle = new CheckButton();
+        _boundsToggle.Text = "Show Venue Bounds (Tab)";
+        _boundsToggle.ButtonPressed = false;
+        _boundsToggle.AddThemeColorOverride("font_color", TextColor);
+        _boundsToggle.AddThemeFontSizeOverride("font_size", 11);
+        _boundsToggle.Toggled += (pressed) =>
+        {
+            _showBounds = pressed;
+            var venueGrid = GetTree().Root.FindChild("VenueGrid", true, false) as LazerSystem.Preview.VenueGrid;
+            venueGrid?.SetShowBounds(pressed);
+        };
+        vbox.AddChild(_boundsToggle);
+
         // ── Projector Positions & Rotation ──
         var posHeader = new Label();
         posHeader.Text = "Projector Transform";
@@ -983,10 +997,24 @@ public partial class MainUI : CanvasLayer
     // ═══════════════════════════════════════════════
     //  KEYBOARD INPUT
     // ═══════════════════════════════════════════════
+    private bool _showBounds;
+    private CheckButton _boundsToggle; // kept in sync with hotkey
+
     public override void _UnhandledInput(InputEvent @event)
     {
         if (@event is InputEventKey keyEvent && keyEvent.Pressed && !keyEvent.Echo)
         {
+            // Tab: toggle venue boundary surfaces
+            if (keyEvent.Keycode == Key.Tab)
+            {
+                _showBounds = !_showBounds;
+                if (_boundsToggle != null) _boundsToggle.SetPressedNoSignal(_showBounds);
+                var venueGrid = GetTree().Root.FindChild("VenueGrid", true, false) as LazerSystem.Preview.VenueGrid;
+                venueGrid?.SetShowBounds(_showBounds);
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             // F1-F12 quick page switch (first 12 fav pages or sequential)
             if (keyEvent.Keycode >= Key.F1 && keyEvent.Keycode <= Key.F12)
             {
