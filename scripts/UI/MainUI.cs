@@ -85,6 +85,12 @@ public partial class MainUI : CanvasLayer
     // Track previous page to avoid redundant refreshes
     private int _lastRenderedPage = -1;
 
+    // Dirty tracking for grid refresh — only rebuild styles when state actually changes
+    private bool _gridDirty = true;
+    private int[] _lastActiveState = new int[60]; // flattened 6x10 grid of active states
+    private float _uiUpdateAccumulator;
+    private const float UiUpdateInterval = 0.1f; // update toolbar/status at 10Hz, not every frame
+
     public override void _Ready()
     {
         var root = new VBoxContainer();
@@ -1073,12 +1079,47 @@ public partial class MainUI : CanvasLayer
         if (currentPage != _lastRenderedPage)
         {
             _lastRenderedPage = currentPage;
+            _gridDirty = true;
             RefreshPageList();
             RefreshFavBar();
         }
-        RefreshGrid();
-        UpdateToolbar();
-        UpdateStatusBar();
+
+        // Check if any cue active states changed (cheap int comparison)
+        for (int r = 0; r < 6; r++)
+        {
+            for (int c = 0; c < 10; c++)
+            {
+                int idx = r * 10 + c;
+                int state = LiveEngine.Instance.ActiveCueGrid[r, c];
+                if (state != _lastActiveState[idx])
+                {
+                    _lastActiveState[idx] = state;
+                    _gridDirty = true;
+                }
+            }
+        }
+
+        // Only rebuild grid styles when something changed
+        if (_gridDirty)
+        {
+            _gridDirty = false;
+            RefreshGrid();
+        }
+
+        // Update toolbar/status at reduced rate (10Hz instead of every frame)
+        _uiUpdateAccumulator += (float)delta;
+        if (_uiUpdateAccumulator >= UiUpdateInterval)
+        {
+            _uiUpdateAccumulator -= UiUpdateInterval;
+            UpdateToolbar();
+            UpdateStatusBar();
+        }
+    }
+
+    /// <summary>Call to force a grid refresh next frame (e.g. after cue edit).</summary>
+    public void MarkGridDirty()
+    {
+        _gridDirty = true;
     }
 
     // ═══════════════════════════════════════════════

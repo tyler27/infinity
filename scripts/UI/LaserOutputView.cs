@@ -46,12 +46,14 @@ public partial class LaserOutputView : Control
         if (points != null)
             _projectorPoints[projector].AddRange(points);
         _projectorActive[projector] = active;
+        _needsRedraw = true;
     }
 
     /// <summary>Set whether any projector has overflow.</summary>
     public void SetOverflow(bool overflow)
     {
         _overflow = overflow;
+        _needsRedraw = true;
     }
 
     /// <summary>Clear all points (call at start of frame before setting new points).</summary>
@@ -64,9 +66,15 @@ public partial class LaserOutputView : Control
         }
     }
 
+    private bool _needsRedraw;
+
     public override void _Process(double delta)
     {
-        QueueRedraw();
+        if (_needsRedraw)
+        {
+            _needsRedraw = false;
+            QueueRedraw();
+        }
     }
 
     public override void _Draw()
