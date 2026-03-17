@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="ProjectorConfig" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/Core/Models/ProjectorConfig.cs" id="1"]
+
+[resource]
+script = ExtResource("1")
+ProjectorName = "FB4 #3"
+IpAddress = "192.168.0.83"
+ArtNetUniverse = 2
+SerialNumber = ""
+Enabled = true
+GizmoColor = Color(0, 0, 1, 1)

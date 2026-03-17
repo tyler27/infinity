@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="ProjectionZone" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/Core/Models/ProjectionZone.cs" id="1"]
+
+[resource]
+script = ExtResource("1")
+ZoneName = "Zone 4 - Right"
+ProjectorIndex = 3
+PositionOffset = Vector2(0, 0)
+Scale = Vector2(1, 1)
+Rotation = 0.0
+SafetyZone = Rect2(0, 0, 1, 1)
+Enabled = true

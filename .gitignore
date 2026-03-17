@@ -1,0 +1,80 @@
+# Godot
+.godot/
+*.translation
+export_presets.cfg
+
+# .NET / Godot C# build artifacts
+bin/
+obj/
+*.csproj
+*.sln
+*.DotSettings*
+
+# Unity (legacy, project was migrated)
+Library/
+Temp/
+Logs/
+UserSettings/
+MemoryCaptures/
+Recordings/
+*.unitypackage
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.swp
+*~
+
+# Build outputs
+*.exe
+*.dll
+*.dylib
+*.so
+*.app
+
+# Audio (large files - add specific ones you want to track)
+# audio/*.wav
+# audio/*.mp3
+
+# Temp files
+*.tmp
+*.bak
+*.log
+
+# Claude
+.claude/
+
+# Unity activation files
+*.alf
+
+# Godot import metadata
+*.import
+*.meta
+*.uid
+
+# Large audio files (use Git LFS or download separately)
+audio/*.wav
+audio/*.mp3
+audio/*.ogg
+audio/*.aif
