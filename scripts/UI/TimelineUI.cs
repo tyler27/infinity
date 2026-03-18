@@ -171,9 +171,29 @@ namespace LazerSystem.UI
             AddChild(colorAutoPopup);
         }
 
+        private bool _dirty = true;
+        private float _lastPlayheadTime = -1f;
+
+        private void MarkDirty() { _dirty = true; }
+
         public override void _Process(double delta)
         {
-            QueueRedraw();
+            // Only redraw when something changed
+            if (syncManager != null)
+            {
+                float t = syncManager.CurrentTime;
+                if (t != _lastPlayheadTime)
+                {
+                    _lastPlayheadTime = t;
+                    _dirty = true;
+                }
+            }
+
+            if (_dirty)
+            {
+                _dirty = false;
+                QueueRedraw();
+            }
         }
 
         public override void _UnhandledInput(InputEvent @event)
@@ -295,10 +315,12 @@ namespace LazerSystem.UI
             if (@event is InputEventMouseButton mouseButton)
             {
                 HandleMouseButton(mouseButton);
+                _dirty = true;
             }
             else if (@event is InputEventMouseMotion mouseMotion)
             {
                 HandleMouseMotion(mouseMotion);
+                _dirty = true;
             }
         }
 
@@ -1188,7 +1210,7 @@ namespace LazerSystem.UI
                 selectedBlocks.Add(clone);
             selectedBlock = clones[0];
             OnBlockSelected?.Invoke(selectedBlock);
-            QueueRedraw();
+            MarkDirty();
         }
 
         // --- Draw Mode Finish ---
@@ -1516,7 +1538,7 @@ namespace LazerSystem.UI
                     inspectorPanel.HidePanel();
             }
 
-            QueueRedraw();
+            MarkDirty();
         }
 
         private void ToggleBlockSelection(LaserCueBlock block)
@@ -1547,7 +1569,7 @@ namespace LazerSystem.UI
                     inspectorPanel.HidePanel();
             }
 
-            QueueRedraw();
+            MarkDirty();
         }
 
         private bool IsBlockSelected(LaserCueBlock block)
@@ -1968,8 +1990,6 @@ namespace LazerSystem.UI
                 }
             }
 
-            // Redraw track headers on top to cover any bleeding from blocks/automation
-            DrawTrackHeaders(tracks, viewHeight);
 
             // Draw mode preview
             if (isDrawing)
@@ -2293,7 +2313,7 @@ namespace LazerSystem.UI
             if (range <= 0f) range = 1f;
 
             // Draw filled area + polyline by sampling at ~2px intervals
-            int steps = Mathf.Max(2, (int)(blockWidth / 2f));
+            int steps = Mathf.Max(2, (int)(blockWidth / 4f));
             var polylinePoints = new Vector2[steps + 1];
 
             for (int i = 0; i <= steps; i++)
@@ -2306,18 +2326,20 @@ namespace LazerSystem.UI
                 polylinePoints[i] = new Vector2(px, py);
             }
 
-            // Semi-transparent fill (draw as triangles from bottom)
+            // Semi-transparent fill as single polygon (curve top + bottom edge)
             Color fillColor = lineColor;
             fillColor.A = 0.15f;
             float bottomY = blockY + blockHeight;
-            for (int i = 0; i < steps; i++)
+            var fillVerts = new Vector2[(steps + 1) * 2];
+            var fillColors = new Color[(steps + 1) * 2];
+            for (int i = 0; i <= steps; i++)
             {
-                var p1 = polylinePoints[i];
-                var p2 = polylinePoints[i + 1];
-                var p3 = new Vector2(p2.X, bottomY);
-                var p4 = new Vector2(p1.X, bottomY);
-                DrawPolygon(new Vector2[] { p1, p2, p3, p4 }, new Color[] { fillColor, fillColor, fillColor, fillColor });
+                fillVerts[i] = polylinePoints[i];
+                fillVerts[fillVerts.Length - 1 - i] = new Vector2(polylinePoints[i].X, bottomY);
+                fillColors[i] = fillColor;
+                fillColors[fillColors.Length - 1 - i] = fillColor;
             }
+            DrawPolygon(fillVerts, fillColors);
 
             // Polyline
             lineColor.A = 0.9f;
@@ -2415,7 +2437,7 @@ namespace LazerSystem.UI
             float range = lane.MaxValue - lane.MinValue;
             if (range <= 0f) range = 1f;
 
-            int steps = Mathf.Max(2, (int)(blockWidth / 2f));
+            int steps = Mathf.Max(2, (int)(blockWidth / 4f));
             var polylinePoints = new Vector2[steps + 1];
 
             for (int i = 0; i <= steps; i++)
@@ -2428,18 +2450,20 @@ namespace LazerSystem.UI
                 polylinePoints[i] = new Vector2(px, py);
             }
 
-            // Semi-transparent fill
+            // Semi-transparent fill as single polygon
             Color fillColor = lineColor;
             fillColor.A = 0.08f;
             float bottomY = blockY + blockHeight;
-            for (int i = 0; i < steps; i++)
+            var fillVerts = new Vector2[(steps + 1) * 2];
+            var fillColors = new Color[(steps + 1) * 2];
+            for (int i = 0; i <= steps; i++)
             {
-                var p1 = polylinePoints[i];
-                var p2 = polylinePoints[i + 1];
-                var p3 = new Vector2(p2.X, bottomY);
-                var p4 = new Vector2(p1.X, bottomY);
-                DrawPolygon(new Vector2[] { p1, p2, p3, p4 }, new Color[] { fillColor, fillColor, fillColor, fillColor });
+                fillVerts[i] = polylinePoints[i];
+                fillVerts[fillVerts.Length - 1 - i] = new Vector2(polylinePoints[i].X, bottomY);
+                fillColors[i] = fillColor;
+                fillColors[fillColors.Length - 1 - i] = fillColor;
             }
+            DrawPolygon(fillVerts, fillColors);
 
             // Polyline
             Color drawColor = lineColor;
@@ -2515,19 +2539,19 @@ namespace LazerSystem.UI
         public void ZoomIn()
         {
             pixelsPerSecond = Mathf.Min(pixelsPerSecond * 1.25f, maxPixelsPerSecond);
-            QueueRedraw();
+            MarkDirty();
         }
 
         public void ZoomOut()
         {
             pixelsPerSecond = Mathf.Max(pixelsPerSecond * 0.8f, minPixelsPerSecond);
-            QueueRedraw();
+            MarkDirty();
         }
 
         public void ScrollHorizontal(float deltaSeconds)
         {
             scrollOffset = Mathf.Max(0f, scrollOffset + deltaSeconds);
-            QueueRedraw();
+            MarkDirty();
         }
     }
 }
