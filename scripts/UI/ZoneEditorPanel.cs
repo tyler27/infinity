@@ -193,7 +193,12 @@ public partial class ZoneEditorPanel : FloatingPanel
         _projectorOption.ItemSelected += (idx) =>
         {
             var zone = GetSelectedZone();
-            if (zone != null) zone.ProjectorIndex = (int)idx;
+            if (zone != null)
+            {
+                zone.ProjectorIndex = (int)idx;
+                if (LazerSystem.Zones.ZoneManager.Instance != null)
+                    LazerSystem.Zones.ZoneManager.Instance.InvalidateCache();
+            }
         };
         projRow.AddChild(_projectorOption);
 
@@ -273,6 +278,10 @@ public partial class ZoneEditorPanel : FloatingPanel
                 {
                     corners[0], corners[1], corners[2], corners[3]
                 };
+                // Rebuild boundary to reflect new keystone
+                var renderer = GetRendererForZone(zone.ProjectorIndex);
+                if (renderer != null && renderer.ShowZoneBoundary)
+                    RebuildBoundaryForRenderer(renderer, zone.ProjectorIndex);
             }
         };
         _rightPanelContent.AddChild(_keystoneCanvas);
@@ -299,6 +308,9 @@ public partial class ZoneEditorPanel : FloatingPanel
                     defaultCorners[0], defaultCorners[1],
                     defaultCorners[2], defaultCorners[3]
                 };
+                var renderer = GetRendererForZone(zone.ProjectorIndex);
+                if (renderer != null && renderer.ShowZoneBoundary)
+                    RebuildBoundaryForRenderer(renderer, zone.ProjectorIndex);
             }
         };
         _rightPanelContent.AddChild(resetKeystoneBtn);
@@ -525,6 +537,11 @@ public partial class ZoneEditorPanel : FloatingPanel
         zone.Enabled = true;
 
         mgr.Zones.Add(zone);
+
+        // Invalidate zone cache so ZoneManager picks up the new zone
+        if (LazerSystem.Zones.ZoneManager.Instance != null)
+            LazerSystem.Zones.ZoneManager.Instance.InvalidateCache();
+
         RefreshZoneList();
 
         // Auto-select the new zone
@@ -537,7 +554,27 @@ public partial class ZoneEditorPanel : FloatingPanel
         if (mgr == null || _selectedZoneIndex < 0 || _selectedZoneIndex >= mgr.Zones.Count)
             return;
 
+        // Get the projector index before removal so we can clean up its boundary
+        int removedProjectorIndex = mgr.Zones[_selectedZoneIndex].ProjectorIndex;
+
         mgr.Zones.RemoveAt(_selectedZoneIndex);
+
+        // Invalidate zone cache
+        if (LazerSystem.Zones.ZoneManager.Instance != null)
+            LazerSystem.Zones.ZoneManager.Instance.InvalidateCache();
+
+        // Turn off boundary for the removed zone's projector if no zones remain on it
+        var zm = LazerSystem.Zones.ZoneManager.Instance;
+        if (zm != null)
+        {
+            var remaining = zm.GetZonesForProjector(removedProjectorIndex);
+            if (remaining.Count == 0)
+            {
+                var renderer = GetRendererForZone(removedProjectorIndex);
+                if (renderer != null)
+                    renderer.SetShowZoneBoundary(false);
+            }
+        }
 
         if (_selectedZoneIndex >= mgr.Zones.Count)
             _selectedZoneIndex = mgr.Zones.Count - 1;
@@ -548,6 +585,10 @@ public partial class ZoneEditorPanel : FloatingPanel
         {
             _selectedZoneIndex = -1;
             _rightScroll.Visible = false;
+            _showingBoundary = false;
+            StyleButton(_showBoundaryBtn, CueDefault);
+            _showBoundaryBtn.Text = "Show Zone Boundary";
+            _showBoundaryBtn.AddThemeColorOverride("font_color", TextColor);
         }
 
         RefreshZoneList();
@@ -597,15 +638,17 @@ public partial class ZoneEditorPanel : FloatingPanel
         _showBoundaryBtn.AddThemeColorOverride("font_color",
             _showingBoundary ? Colors.Black : TextColor);
 
-        // Toggle boundary on this zone's projector renderer
+        // Toggle boundary on this zone's projector renderer (filtered to selected zone only)
         var zone = GetSelectedZone();
         if (zone == null) return;
 
         var renderer = GetRendererForZone(zone.ProjectorIndex);
         if (renderer != null)
         {
-            renderer.SetShowZoneBoundary(_showingBoundary);
+            renderer.SetShowZoneBoundary(_showingBoundary, _showingBoundary ? _selectedZoneIndex : -1);
             renderer.SetZoneColor(GetProjectorColor(zone.ProjectorIndex));
+            if (_showingBoundary)
+                RebuildBoundaryForRenderer(renderer, zone.ProjectorIndex);
         }
     }
 
@@ -626,10 +669,13 @@ public partial class ZoneEditorPanel : FloatingPanel
             var renderer = preview3D.GetNodeOrNull<LazerSystem.Preview.LaserPreviewRenderer>($"Projector{i + 1}");
             if (renderer != null)
             {
-                renderer.SetShowZoneBoundary(_showingAllBoundaries);
+                renderer.SetShowZoneBoundary(_showingAllBoundaries, -1);
                 renderer.SetZoneColor(GetProjectorColor(i));
             }
         }
+
+        if (_showingAllBoundaries)
+            RebuildAllBoundaries();
 
         // Sync per-zone button to match
         var selectedZone = GetSelectedZone();
@@ -649,6 +695,42 @@ public partial class ZoneEditorPanel : FloatingPanel
         var preview3D = GetTree().Root.FindChild("Preview3D", true, false);
         if (preview3D == null) return null;
         return preview3D.GetNodeOrNull<LazerSystem.Preview.LaserPreviewRenderer>($"Projector{projectorIndex + 1}");
+    }
+
+    private void RebuildBoundaryForRenderer(LazerSystem.Preview.LaserPreviewRenderer renderer, int projectorIndex)
+    {
+        if (renderer == null || !renderer.ShowZoneBoundary) return;
+
+        var zm = LazerSystem.Zones.ZoneManager.Instance;
+        if (zm == null) return;
+
+        int filter = renderer.BoundaryZoneFilter;
+        var allPoints = new System.Collections.Generic.List<LazerSystem.Core.LaserPoint>();
+
+        var zoneIndices = zm.GetZonesForProjector(projectorIndex);
+        foreach (int zIdx in zoneIndices)
+        {
+            if (filter >= 0 && zIdx != filter) continue;
+            var zone = zm.Zones[zIdx];
+            if (zone == null || !zone.Enabled) continue;
+            var pts = renderer.GenerateZoneBoundaryPoints(zone.KeystoneCorners);
+            if (pts != null) allPoints.AddRange(pts);
+        }
+
+        renderer.RenderBoundary(allPoints);
+    }
+
+    private void RebuildAllBoundaries()
+    {
+        var preview3D = GetTree().Root.FindChild("Preview3D", true, false);
+        if (preview3D == null) return;
+
+        for (int i = 0; i < 4; i++)
+        {
+            var renderer = preview3D.GetNodeOrNull<LazerSystem.Preview.LaserPreviewRenderer>($"Projector{i + 1}");
+            if (renderer != null && renderer.ShowZoneBoundary)
+                RebuildBoundaryForRenderer(renderer, i);
+        }
     }
 
     private Color GetProjectorColor(int index)

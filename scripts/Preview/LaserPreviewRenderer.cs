@@ -39,6 +39,10 @@ namespace LazerSystem.Preview
         private StandardMaterial3D _sourceMaterial;
 
         private bool _showZoneBoundary;
+        private int _boundaryZoneFilter = -1;
+        private ImmediateMesh _boundaryMesh;
+        private MeshInstance3D _boundaryMeshInstance;
+        private bool _boundaryDirty;
 
         // Cached per-frame render state to avoid repeated property access
         private Vector3 _cachedOrigin;
@@ -47,6 +51,9 @@ namespace LazerSystem.Preview
 
         /// <summary>Whether zone boundary is enabled for this projector.</summary>
         public bool ShowZoneBoundary => _showZoneBoundary;
+
+        /// <summary>When >= 0, only show boundary for this specific zone index. -1 = show all zones on this projector.</summary>
+        public int BoundaryZoneFilter => _boundaryZoneFilter;
 
         public override void _Ready()
         {
@@ -84,18 +91,119 @@ namespace LazerSystem.Preview
             _sourceMaterial.Transparency = BaseMaterial3D.TransparencyEnum.Alpha;
             _sourceMeshInstance.MaterialOverride = _sourceMaterial;
             AddChild(_sourceMeshInstance);
+
+            // Boundary mesh (persists independently of per-frame RenderFrame)
+            _boundaryMesh = new ImmediateMesh();
+            _boundaryMeshInstance = new MeshInstance3D();
+            _boundaryMeshInstance.Mesh = _boundaryMesh;
+            _boundaryMeshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
+            _boundaryMeshInstance.TopLevel = true;
+            _boundaryMeshInstance.Visible = false;
+            _boundaryMeshInstance.MaterialOverride = _beamMaterial;
+            AddChild(_boundaryMeshInstance);
         }
 
         /// <summary>Toggle zone boundary visibility for this projector.</summary>
-        public void SetShowZoneBoundary(bool show)
+        public void SetShowZoneBoundary(bool show, int zoneFilter = -1)
         {
             _showZoneBoundary = show;
+            _boundaryZoneFilter = zoneFilter;
+            _boundaryDirty = true;
+            if (_boundaryMeshInstance != null)
+                _boundaryMeshInstance.Visible = show;
+            if (!show && _boundaryMesh != null)
+                _boundaryMesh.ClearSurfaces();
+        }
+
+        /// <summary>Mark boundary as needing rebuild (call when keystone corners change).</summary>
+        public void MarkBoundaryDirty()
+        {
+            _boundaryDirty = true;
         }
 
         /// <summary>Set the zone color (matches projector color).</summary>
         public void SetZoneColor(Color color)
         {
             ZoneColor = color;
+            _boundaryDirty = true;
+        }
+
+        /// <summary>Renders boundary points into the persistent boundary mesh (not affected by RenderFrame).</summary>
+        public void RenderBoundary(List<LaserPoint> boundaryPoints)
+        {
+            if (_boundaryMesh == null) return;
+            _boundaryMesh.ClearSurfaces();
+
+            if (boundaryPoints == null || boundaryPoints.Count < 2)
+                return;
+
+            _cachedOrigin = GlobalPosition;
+            _cachedBasis = GlobalTransform.Basis;
+            _cachedHalfAngleRad = Mathf.DegToRad(ScanAngleDeg * 0.5f);
+
+            // Collect segments
+            var segments = new List<(int start, int end)>();
+            int segStart = -1;
+            for (int i = 0; i < boundaryPoints.Count; i++)
+            {
+                if (boundaryPoints[i].blanking)
+                {
+                    if (segStart >= 0 && i - segStart >= 2)
+                        segments.Add((segStart, i - 1));
+                    segStart = -1;
+                }
+                else
+                {
+                    if (segStart < 0) segStart = i;
+                }
+            }
+            if (segStart >= 0 && boundaryPoints.Count - segStart >= 2)
+                segments.Add((segStart, boundaryPoints.Count - 1));
+
+            if (segments.Count == 0) return;
+
+            var camera = GetViewport()?.GetCamera3D();
+            Vector3 camPos = camera != null ? camera.GlobalPosition : new Vector3(0, 5, 15);
+
+            _boundaryMesh.SurfaceBegin(Mesh.PrimitiveType.Triangles);
+
+            foreach (var seg in segments)
+            {
+                Vector3 wPrev = LaserPointToWorld(boundaryPoints[seg.start]);
+                for (int i = seg.start; i < seg.end; i++)
+                {
+                    LaserPoint p0 = boundaryPoints[i];
+                    LaserPoint p1 = boundaryPoints[i + 1];
+
+                    Vector3 w0 = wPrev;
+                    Vector3 w1 = LaserPointToWorld(p1);
+                    wPrev = w1;
+
+                    Vector3 lineDir = (w1 - w0).Normalized();
+                    Vector3 camDir = ((camPos - w0) + (camPos - w1)).Normalized();
+                    Vector3 side = lineDir.Cross(camDir).Normalized() * BeamWidth;
+
+                    Color c0 = PointColor(p0, 0.8f);
+                    Color c1 = PointColor(p1, 0.8f);
+
+                    _boundaryMesh.SurfaceSetColor(c0);
+                    _boundaryMesh.SurfaceAddVertex(w0 - side);
+                    _boundaryMesh.SurfaceSetColor(c0);
+                    _boundaryMesh.SurfaceAddVertex(w0 + side);
+                    _boundaryMesh.SurfaceSetColor(c1);
+                    _boundaryMesh.SurfaceAddVertex(w1 + side);
+
+                    _boundaryMesh.SurfaceSetColor(c0);
+                    _boundaryMesh.SurfaceAddVertex(w0 - side);
+                    _boundaryMesh.SurfaceSetColor(c1);
+                    _boundaryMesh.SurfaceAddVertex(w1 + side);
+                    _boundaryMesh.SurfaceSetColor(c1);
+                    _boundaryMesh.SurfaceAddVertex(w1 - side);
+                }
+            }
+
+            _boundaryMesh.SurfaceEnd();
+            _boundaryDirty = false;
         }
 
         /// <summary>

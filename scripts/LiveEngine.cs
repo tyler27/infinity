@@ -292,38 +292,6 @@ public partial class LiveEngine : Node
 			}
 		}
 
-		// Record where pattern output ends (boundary points come after)
-		int[] boundaryStartIdx = new int[ProjectorCount];
-		for (int i = 0; i < ProjectorCount; i++)
-			boundaryStartIdx[i] = _projectorPoints[i].Count;
-
-		// Append zone boundary points when enabled (treated as real laser output)
-		for (int i = 0; i < ProjectorCount; i++)
-		{
-			if (_renderers[i] != null && _renderers[i].ShowZoneBoundary)
-			{
-				// Find the zone's keystone corners for this projector
-				Vector2[] corners = null;
-				if (zoneManager != null)
-				{
-					var zoneIndices = zoneManager.GetZonesForProjector(i);
-					if (zoneIndices.Count > 0 && zoneManager.Zones[zoneIndices[0]] != null)
-					{
-						corners = zoneManager.Zones[zoneIndices[0]].KeystoneCorners;
-					}
-				}
-
-				int startIdx = _projectorPoints[i].Count;
-				var boundaryPts = _renderers[i].GenerateZoneBoundaryPoints(corners);
-				if (boundaryPts != null && boundaryPts.Count > 0)
-				{
-					_projectorHasOutput[i] = true;
-					_projectorPoints[i].AddRange(boundaryPts);
-					AccumulateDmxStats(i, _projectorPoints[i], startIdx);
-				}
-			}
-		}
-
 		// Render and send DMX for each projector
 		// When PlaybackManager is playing, skip clearing renderers so timeline output persists
 		bool timelinePlaying = PlaybackManager.Instance != null && PlaybackManager.Instance.IsPlaying && !PlaybackManager.Instance.IsPaused;
@@ -333,7 +301,7 @@ public partial class LiveEngine : Node
 			if (_projectorHasOutput[i] && _projectorPoints[i].Count > 0)
 			{
 				if (_renderers[i] != null)
-					_renderers[i].RenderFrame(_projectorPoints[i], boundaryStartIdx[i]);
+					_renderers[i].RenderFrame(_projectorPoints[i]);
 
 				SendProjectorDmx(i);
 			}
