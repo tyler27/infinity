@@ -1,5 +1,6 @@
 using Godot;
 using Godot.Collections;
+using LazerSystem.Timeline;
 
 namespace LazerSystem.Core
 {
@@ -13,15 +14,6 @@ namespace LazerSystem.Core
 		[Export] public float Offset;
 
 		[Export] public Array<LaserCueBlock> TimelineBlocks = new Array<LaserCueBlock>();
-	}
-
-	[GlobalClass]
-	public partial class LaserCueBlock : Resource
-	{
-		[Export] public LaserCue Cue;
-		[Export] public int TrackIndex;
-		[Export] public float StartTime;
-		[Export] public float Duration = 1f;
-		[Export] public int ZoneIndex;
+		[Export] public Array<TimeMarker> Markers = new();
 	}
 }

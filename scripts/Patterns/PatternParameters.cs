@@ -17,6 +17,7 @@ namespace LazerSystem.Patterns
         public float frequency = 1f;
         public float amplitude = 0.5f;
         public Vector2 position = Vector2.Zero;
+        public string text = "";
 
         public PatternParameters() { }
 
@@ -50,6 +51,7 @@ namespace LazerSystem.Patterns
             frequency = cue.Frequency;
             amplitude = cue.Amplitude;
             position = cue.Position;
+            text = cue.CueName ?? "";
         }
 
         /// <summary>
@@ -68,7 +70,8 @@ namespace LazerSystem.Patterns
                 count = cue.Count,
                 frequency = cue.Frequency,
                 amplitude = cue.Amplitude,
-                position = cue.Position
+                position = cue.Position,
+                text = cue.CueName ?? ""
             };
         }
 

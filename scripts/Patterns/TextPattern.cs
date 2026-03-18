@@ -13,14 +13,6 @@ namespace LazerSystem.Patterns
     {
         public string PatternName => "Text";
 
-        private string _text = "LASER";
-
-        public string Text
-        {
-            get => _text;
-            set => _text = value?.ToUpperInvariant() ?? "";
-        }
-
         private const int PointsPerStroke = 6;
 
         // Vector font: each character is an array of strokes.
@@ -37,7 +29,7 @@ namespace LazerSystem.Patterns
             float cx = parameters.position.X;
             float cy = parameters.position.Y;
 
-            string text = _text;
+            string text = string.IsNullOrEmpty(parameters.text) ? "TEXT" : parameters.text.ToUpperInvariant();
             if (string.IsNullOrEmpty(text)) return;
 
             float totalWidth = text.Length * spacing - (spacing - charWidth);

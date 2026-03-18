@@ -42,6 +42,10 @@ namespace LazerSystem.Sync
 
         private bool _isRunning;
 
+        // Free-running internal clock (used when no audio is loaded)
+        private float _internalTime;
+        private bool _internalClockRunning;
+
         // Events
         public event Action OnPlay;
         public event Action OnStop;
@@ -49,6 +53,24 @@ namespace LazerSystem.Sync
         public event Action<float> OnSeek;
 
         private bool _looping;
+
+        // Loop region
+        private float _loopStartTime;
+        private float _loopEndTime;
+
+        public float LoopStartTime
+        {
+            get => _loopStartTime;
+            set => _loopStartTime = value;
+        }
+
+        public float LoopEndTime
+        {
+            get => _loopEndTime;
+            set => _loopEndTime = value;
+        }
+
+        public bool HasLoopRegion => _loopEndTime > _loopStartTime;
 
         public SyncSource CurrentSyncSource
         {
@@ -71,7 +93,9 @@ namespace LazerSystem.Sync
                 switch (_currentSource)
                 {
                     case SyncSource.Internal:
-                        return _audioPlayer != null ? (float)_audioPlayer.GetPlaybackPosition() : 0f;
+                        if (_audioPlayer != null && _audioPlayer.Stream != null && _audioPlayer.Playing)
+                            return (float)_audioPlayer.GetPlaybackPosition();
+                        return _internalTime;
 
                     case SyncSource.MidiTimeCode:
                         return _midiTimecodeReceiver != null ? _midiTimecodeReceiver.CurrentTime : 0f;
@@ -104,14 +128,49 @@ namespace LazerSystem.Sync
             }
         }
 
+        public override void _Process(double delta)
+        {
+            if (_internalClockRunning)
+            {
+                _internalTime += (float)delta;
+
+                // Loop region wrapping
+                if (HasLoopRegion && _internalTime >= _loopEndTime)
+                {
+                    _internalTime = _loopStartTime;
+
+                    if (_currentSource == SyncSource.Internal && _audioPlayer != null && _audioPlayer.Stream != null && _audioPlayer.Playing)
+                    {
+                        _audioPlayer.Seek(_loopStartTime);
+                    }
+                }
+            }
+        }
+
+        public void ClearLoopRegion()
+        {
+            _loopStartTime = 0f;
+            _loopEndTime = 0f;
+        }
+
         /// <summary>Starts playback from the current position.</summary>
         public void Play()
         {
             _isRunning = true;
+            _internalClockRunning = true;
 
-            if (_currentSource == SyncSource.Internal && _audioPlayer != null)
+            if (_currentSource == SyncSource.Internal && _audioPlayer != null && _audioPlayer.Stream != null)
             {
-                _audioPlayer.Play();
+                if (_audioPlayer.StreamPaused)
+                {
+                    // Resume from paused position
+                    _audioPlayer.StreamPaused = false;
+                }
+                else if (!_audioPlayer.Playing)
+                {
+                    // Start fresh or seek to internal time
+                    _audioPlayer.Play((float)Mathf.Max(0f, _internalTime));
+                }
             }
 
             OnPlay?.Invoke();
@@ -122,6 +181,7 @@ namespace LazerSystem.Sync
         public void Pause()
         {
             _isRunning = false;
+            _internalClockRunning = false;
 
             if (_currentSource == SyncSource.Internal && _audioPlayer != null)
             {
@@ -136,6 +196,8 @@ namespace LazerSystem.Sync
         public void Stop()
         {
             _isRunning = false;
+            _internalClockRunning = false;
+            _internalTime = 0f;
 
             if (_currentSource == SyncSource.Internal && _audioPlayer != null)
             {
@@ -149,9 +211,11 @@ namespace LazerSystem.Sync
         /// <summary>Seeks to a specific time in seconds.</summary>
         public void Seek(float time)
         {
-            if (_currentSource == SyncSource.Internal && _audioPlayer != null)
+            _internalTime = Mathf.Max(0f, time);
+
+            if (_currentSource == SyncSource.Internal && _audioPlayer != null && _audioPlayer.Stream != null)
             {
-                float duration = _audioPlayer.Stream != null ? (float)_audioPlayer.Stream.GetLength() : 0f;
+                float duration = (float)_audioPlayer.Stream.GetLength();
                 _audioPlayer.Seek(Mathf.Clamp(time, 0f, duration));
             }
 

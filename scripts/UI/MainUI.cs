@@ -1,6 +1,9 @@
 using Godot;
 using LazerSystem.Core;
 using LazerSystem.Patterns;
+using LazerSystem.Timeline;
+using LazerSystem.Sync;
+using LazerSystem.UI;
 
 public partial class MainUI : CanvasLayer
 {
@@ -81,6 +84,17 @@ public partial class MainUI : CanvasLayer
         new string[] { "A", "S", "D", "F", "G", "H", "J", "K", "L", ";" },
         new string[] { "Z", "X", "C", "V", "B", "N", "M", ",", ".", "/" }
     };
+
+    // View mode
+    private enum ViewMode { Live, Timeline }
+    private ViewMode _viewMode = ViewMode.Live;
+    private Button _liveViewBtn;
+    private Button _timelineViewBtn;
+    private Control _liveContent;
+    private Control _timelineContent;
+    private TimelineUI _timelineUI;
+    private TransportBarUI _transportBarUI;
+    private BlockInspectorPanel _inspectorPanel;
 
     // Track previous page to avoid redundant refreshes
     private int _lastRenderedPage = -1;
@@ -170,6 +184,17 @@ public partial class MainUI : CanvasLayer
 
         toolbar.AddChild(CreateToolbarSeparator());
 
+        // View mode toggle
+        _liveViewBtn = CreateStyledButton("LIVE", new Vector2(60, 34), ActiveGreen);
+        _liveViewBtn.Pressed += () => SwitchViewMode(ViewMode.Live);
+        toolbar.AddChild(_liveViewBtn);
+
+        _timelineViewBtn = CreateStyledButton("TIMELINE", new Vector2(85, 34), new Color(0.3f, 0.3f, 0.35f, 1f));
+        _timelineViewBtn.Pressed += () => SwitchViewMode(ViewMode.Timeline);
+        toolbar.AddChild(_timelineViewBtn);
+
+        toolbar.AddChild(CreateToolbarSeparator());
+
         // Settings panel buttons
         var projSettingsBtn = CreateStyledButton("Projectors", new Vector2(85, 34), new Color(0.2f, 0.3f, 0.5f, 1f));
         projSettingsBtn.Pressed += ToggleProjectorSettings;
@@ -207,23 +232,595 @@ public partial class MainUI : CanvasLayer
 
     private void BuildMainContent(VBoxContainer root)
     {
-        var content = new HBoxContainer();
-        content.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
-        content.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
-        content.AddThemeConstantOverride("separation", 0);
-        root.AddChild(content);
+        // --- Live view (default) ---
+        _liveContent = new HBoxContainer();
+        _liveContent.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        _liveContent.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        ((HBoxContainer)_liveContent).AddThemeConstantOverride("separation", 0);
+        root.AddChild(_liveContent);
 
-        BuildPageSidebar(content);
+        BuildPageSidebar((HBoxContainer)_liveContent);
 
-        // Resizable split between grid and preview+controls
         _mainSplit = new HSplitContainer();
         _mainSplit.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
         _mainSplit.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         _mainSplit.SplitOffset = -320;
-        content.AddChild(_mainSplit);
+        _liveContent.AddChild(_mainSplit);
 
         BuildCenterArea(_mainSplit);
         BuildRightPanel(_mainSplit);
+
+        // --- Timeline view (hidden initially) ---
+        _timelineContent = new VBoxContainer();
+        _timelineContent.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        _timelineContent.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        ((VBoxContainer)_timelineContent).AddThemeConstantOverride("separation", 0);
+        _timelineContent.Visible = false;
+        root.AddChild(_timelineContent);
+
+        BuildTimelineView((VBoxContainer)_timelineContent);
+    }
+
+    // Timeline-view preview
+    private SubViewportContainer _timelinePreviewContainer;
+    private SubViewport _timelinePreviewViewport;
+    private LazerSystem.Preview.OrbitCamera _timelineOrbitCamera;
+    private VBoxContainer _timelinePreviewSettingsPanel;
+    private CheckButton _timelineBoundsToggle;
+
+    private void BuildTimelineView(VBoxContainer parent)
+    {
+        CallDeferred(nameof(ConnectTimelineReferences));
+
+        // Horizontal split: left (preview + timeline) | right (inspector)
+        var mainHSplit = new HSplitContainer();
+        mainHSplit.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        mainHSplit.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        mainHSplit.SplitOffset = -250;
+        parent.AddChild(mainHSplit);
+
+        // Left side: preview on top, timeline on bottom
+        var leftVSplit = new VSplitContainer();
+        leftVSplit.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        leftVSplit.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        mainHSplit.AddChild(leftVSplit);
+
+        // 3D Preview (top portion)
+        var previewSection = new VBoxContainer();
+        previewSection.CustomMinimumSize = new Vector2(0, 150);
+        previewSection.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        previewSection.SizeFlagsStretchRatio = 0.4f;
+        previewSection.AddThemeConstantOverride("separation", 2);
+        leftVSplit.AddChild(previewSection);
+
+        // Preview header with camera presets and settings
+        var previewHeader = new HBoxContainer();
+        previewHeader.AddThemeConstantOverride("separation", 4);
+        previewSection.AddChild(previewHeader);
+
+        var previewLabel = new Label { Text = "PREVIEW" };
+        previewLabel.AddThemeColorOverride("font_color", ActiveGreen);
+        previewLabel.AddThemeFontSizeOverride("font_size", 12);
+        previewHeader.AddChild(previewLabel);
+
+        // Camera preset buttons
+        var presetColor = new Color(0.22f, 0.22f, 0.28f, 1f);
+
+        var tlFrontBtn = CreateStyledButton("Front", new Vector2(45, 22), presetColor);
+        tlFrontBtn.AddThemeFontSizeOverride("font_size", 9);
+        tlFrontBtn.Pressed += () => _timelineOrbitCamera?.SetFront();
+        previewHeader.AddChild(tlFrontBtn);
+
+        var tlTopBtn = CreateStyledButton("Top", new Vector2(35, 22), presetColor);
+        tlTopBtn.AddThemeFontSizeOverride("font_size", 9);
+        tlTopBtn.Pressed += () => _timelineOrbitCamera?.SetTop();
+        previewHeader.AddChild(tlTopBtn);
+
+        var tlSideBtn = CreateStyledButton("Side", new Vector2(38, 22), presetColor);
+        tlSideBtn.AddThemeFontSizeOverride("font_size", 9);
+        tlSideBtn.Pressed += () => _timelineOrbitCamera?.SetSide();
+        previewHeader.AddChild(tlSideBtn);
+
+        var tlProjBtn = CreateStyledButton("Proj", new Vector2(38, 22), presetColor);
+        tlProjBtn.AddThemeFontSizeOverride("font_size", 9);
+        tlProjBtn.Pressed += () => _timelineOrbitCamera?.SetProjectorView();
+        previewHeader.AddChild(tlProjBtn);
+
+        var tlResetBtn = CreateStyledButton("Reset", new Vector2(42, 22), presetColor);
+        tlResetBtn.AddThemeFontSizeOverride("font_size", 9);
+        tlResetBtn.Pressed += () => _timelineOrbitCamera?.Reset();
+        previewHeader.AddChild(tlResetBtn);
+
+        // Spacer
+        var tlPreviewSpacer = new Control();
+        tlPreviewSpacer.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        previewHeader.AddChild(tlPreviewSpacer);
+
+        // Settings button
+        var tlSettingsBtn = CreateStyledButton("Settings", new Vector2(55, 22), new Color(0.25f, 0.25f, 0.3f, 1f));
+        tlSettingsBtn.AddThemeFontSizeOverride("font_size", 10);
+        tlSettingsBtn.Pressed += () =>
+        {
+            if (_timelinePreviewSettingsPanel != null)
+                _timelinePreviewSettingsPanel.Visible = !_timelinePreviewSettingsPanel.Visible;
+        };
+        previewHeader.AddChild(tlSettingsBtn);
+
+        // Settings panel (hidden by default)
+        _timelinePreviewSettingsPanel = new VBoxContainer();
+        _timelinePreviewSettingsPanel.Visible = false;
+        _timelinePreviewSettingsPanel.AddThemeConstantOverride("separation", 4);
+        previewSection.AddChild(_timelinePreviewSettingsPanel);
+        BuildTimelinePreviewSettings(_timelinePreviewSettingsPanel);
+
+        _timelinePreviewContainer = new SubViewportContainer();
+        _timelinePreviewContainer.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        _timelinePreviewContainer.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        _timelinePreviewContainer.Stretch = true;
+        previewSection.AddChild(_timelinePreviewContainer);
+
+        _timelinePreviewViewport = new SubViewport();
+        _timelinePreviewViewport.Size = new Vector2I(640, 360);
+        _timelinePreviewViewport.RenderTargetUpdateMode = SubViewport.UpdateMode.Always;
+        _timelinePreviewViewport.TransparentBg = false;
+        _timelinePreviewViewport.World3D = GetViewport().World3D;
+        _timelinePreviewContainer.AddChild(_timelinePreviewViewport);
+
+        _timelineOrbitCamera = new LazerSystem.Preview.OrbitCamera();
+        _timelinePreviewViewport.AddChild(_timelineOrbitCamera);
+
+        // Timeline (bottom portion)
+        var timelinePanel = new PanelContainer();
+        timelinePanel.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        timelinePanel.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        timelinePanel.SizeFlagsStretchRatio = 0.6f;
+        ApplyPanelStyle(timelinePanel, new Color(0.1f, 0.1f, 0.12f, 1f));
+        leftVSplit.AddChild(timelinePanel);
+
+        _timelineUI = new TimelineUI();
+        _timelineUI.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        _timelineUI.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        timelinePanel.AddChild(_timelineUI);
+
+        // Right side: inspector
+        var inspectorScroll = new ScrollContainer();
+        inspectorScroll.CustomMinimumSize = new Vector2(220, 0);
+        inspectorScroll.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        inspectorScroll.HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled;
+        mainHSplit.AddChild(inspectorScroll);
+
+        var inspectorWrapper = new PanelContainer();
+        inspectorWrapper.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        inspectorWrapper.SizeFlagsVertical = Control.SizeFlags.ExpandFill;
+        ApplyPanelStyle(inspectorWrapper, SidebarBg);
+        inspectorScroll.AddChild(inspectorWrapper);
+
+        _inspectorPanel = new BlockInspectorPanel();
+        _inspectorPanel.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        inspectorWrapper.AddChild(_inspectorPanel);
+
+        // Transport bar at bottom
+        var transportPanel = new PanelContainer();
+        transportPanel.CustomMinimumSize = new Vector2(0, 44);
+        transportPanel.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        ApplyPanelStyle(transportPanel, new Color(0.08f, 0.08f, 0.1f, 1f));
+        parent.AddChild(transportPanel);
+
+        BuildInlineTransportBar(transportPanel);
+    }
+
+    private void BuildInlineTransportBar(PanelContainer parent)
+    {
+        var hbox = new HBoxContainer();
+        hbox.AddThemeConstantOverride("separation", 8);
+        parent.AddChild(hbox);
+
+        // Play / Pause / Stop buttons
+        var playBtn = CreateStyledButton("Play", new Vector2(60, 32), ActiveGreen);
+        var pauseBtn = CreateStyledButton("Pause", new Vector2(60, 32), WarningYellow);
+        var stopBtn = CreateStyledButton("Stop", new Vector2(60, 32), DangerRed);
+
+        playBtn.Pressed += () => PlaybackManager.Instance?.PlayShow();
+        pauseBtn.Pressed += () => PlaybackManager.Instance?.PauseShow();
+        stopBtn.Pressed += () => PlaybackManager.Instance?.StopShow();
+
+        hbox.AddChild(playBtn);
+        hbox.AddChild(pauseBtn);
+        hbox.AddChild(stopBtn);
+
+        hbox.AddChild(CreateToolbarSeparator());
+
+        // Time display
+        var timeLabel = new Label { Text = "00:00:00" };
+        timeLabel.AddThemeColorOverride("font_color", TextColor);
+        timeLabel.AddThemeFontSizeOverride("font_size", 14);
+        timeLabel.CustomMinimumSize = new Vector2(80, 0);
+        hbox.AddChild(timeLabel);
+
+        // Beat display
+        var beatLabel = new Label { Text = "1.1" };
+        beatLabel.AddThemeColorOverride("font_color", ActiveGreen);
+        beatLabel.AddThemeFontSizeOverride("font_size", 14);
+        beatLabel.CustomMinimumSize = new Vector2(50, 0);
+        hbox.AddChild(beatLabel);
+
+        hbox.AddChild(CreateToolbarSeparator());
+
+        // BPM
+        var bpmLabel = new Label { Text = "BPM:" };
+        bpmLabel.AddThemeColorOverride("font_color", DimText);
+        hbox.AddChild(bpmLabel);
+
+        var bpmInput = new LineEdit { Text = "120.0" };
+        bpmInput.CustomMinimumSize = new Vector2(60, 28);
+        bpmInput.AddThemeFontSizeOverride("font_size", 12);
+        bpmInput.TextSubmitted += (text) =>
+        {
+            if (float.TryParse(text, out float bpm))
+            {
+                bpm = Mathf.Clamp(bpm, 20f, 999f);
+                var pbm = PlaybackManager.Instance;
+                if (pbm?.LaserShow != null)
+                    pbm.LaserShow.Bpm = bpm;
+            }
+        };
+        hbox.AddChild(bpmInput);
+
+        hbox.AddChild(CreateToolbarSeparator());
+
+        // Draw mode toggle
+        var drawBtn = CreateStyledButton("Draw", new Vector2(60, 32), new Color(0.3f, 0.3f, 0.35f, 1f));
+        drawBtn.ToggleMode = true;
+        drawBtn.Toggled += (toggled) =>
+        {
+            _timelineUI?.SetDrawMode(toggled);
+            StyleButton(drawBtn, toggled ? ActiveGreen : new Color(0.3f, 0.3f, 0.35f, 1f));
+        };
+        hbox.AddChild(drawBtn);
+
+        var spacer = new Control();
+        spacer.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        hbox.AddChild(spacer);
+
+        // Audio / Save / Load
+        var audioBtn = CreateStyledButton("Audio", new Vector2(60, 32), new Color(0.3f, 0.2f, 0.5f, 1f));
+        hbox.AddChild(audioBtn);
+
+        hbox.AddChild(CreateToolbarSeparator());
+
+        var saveBtn = CreateStyledButton("Save", new Vector2(60, 32), new Color(0.2f, 0.3f, 0.5f, 1f));
+        var loadBtn = CreateStyledButton("Load", new Vector2(60, 32), new Color(0.2f, 0.3f, 0.5f, 1f));
+        hbox.AddChild(saveBtn);
+        hbox.AddChild(loadBtn);
+
+        // File dialogs
+        var saveDialog = new FileDialog
+        {
+            FileMode = FileDialog.FileModeEnum.SaveFile,
+            Title = "Save Show",
+            Access = FileDialog.AccessEnum.Userdata,
+            CurrentDir = "user://shows",
+        };
+        saveDialog.AddFilter("*.tres ; Godot Resource");
+        saveDialog.FileSelected += (path) => PlaybackManager.Instance?.SaveShow(path);
+        AddChild(saveDialog);
+
+        var loadDialog = new FileDialog
+        {
+            FileMode = FileDialog.FileModeEnum.OpenFile,
+            Title = "Load Show",
+            Access = FileDialog.AccessEnum.Userdata,
+            CurrentDir = "user://shows",
+        };
+        loadDialog.AddFilter("*.tres ; Godot Resource");
+        loadDialog.FileSelected += (path) =>
+        {
+            PlaybackManager.Instance?.LoadShow(path);
+            bpmInput.Text = (PlaybackManager.Instance?.BPM ?? 120f).ToString("F1");
+            OnShowLoaded();
+        };
+        AddChild(loadDialog);
+
+        // Audio file dialog
+        var audioDialog = new FileDialog
+        {
+            FileMode = FileDialog.FileModeEnum.OpenFile,
+            Title = "Load Audio File",
+            Access = FileDialog.AccessEnum.Filesystem,
+        };
+        audioDialog.AddFilter("*.wav ; WAV Audio");
+        audioDialog.AddFilter("*.ogg ; OGG Vorbis");
+        audioDialog.AddFilter("*.mp3 ; MP3 Audio");
+        audioDialog.FileSelected += OnAudioFileSelected;
+        AddChild(audioDialog);
+
+        audioBtn.Pressed += () => audioDialog.PopupCentered(new Vector2I(600, 400));
+
+        saveBtn.Pressed += () =>
+        {
+            DirAccess.MakeDirAbsolute("user://shows");
+            saveDialog.PopupCentered(new Vector2I(600, 400));
+        };
+        loadBtn.Pressed += () => loadDialog.PopupCentered(new Vector2I(600, 400));
+
+        // Store references for transport display updates
+        _transportTimeLabel = timeLabel;
+        _transportBeatLabel = beatLabel;
+        _transportBpmInput = bpmInput;
+    }
+
+    // Transport display labels (updated in _Process)
+    private Label _transportTimeLabel;
+    private Label _transportBeatLabel;
+    private LineEdit _transportBpmInput;
+
+    private void OnShowLoaded()
+    {
+        var pbm = PlaybackManager.Instance;
+        if (pbm?.LaserShow == null) return;
+
+        var show = pbm.LaserShow;
+        GD.Print($"[MainUI] OnShowLoaded: '{show.ShowName}', AudioClip={show.AudioClip != null}, AudioClipType={show.AudioClip?.GetType().Name ?? "null"}, Blocks={show.TimelineBlocks?.Count ?? 0}");
+
+        if (show.AudioClip != null)
+        {
+            // Wire audio to SyncManager's player
+            var player = FindAudioPlayer();
+            if (player == null)
+            {
+                player = new AudioStreamPlayer();
+                player.Name = "AudioPlayer";
+                GetTree().Root.AddChild(player);
+                GD.Print("[MainUI] Created new AudioStreamPlayer node");
+            }
+
+            player.Stream = show.AudioClip;
+            GD.Print($"[MainUI] Audio stream set on player: {show.AudioClip.GetType().Name}, length={show.AudioClip.GetLength():F2}s");
+
+            var sm = pbm.syncManager;
+            if (sm != null)
+            {
+                sm.SetAudioPlayer(player);
+                GD.Print("[MainUI] AudioPlayer wired to SyncManager");
+            }
+            else
+            {
+                GD.PrintErr("[MainUI] SyncManager is null — cannot wire audio");
+            }
+
+            // Generate waveform for WAV
+            if (_timelineUI != null && show.AudioClip is AudioStreamWav wav)
+            {
+                int bytesPerFrame = (wav.Format == AudioStreamWav.FormatEnum.Format16Bits ? 2 : 1) * (wav.Stereo ? 2 : 1);
+                int totalFrames = wav.Data != null ? wav.Data.Length / bytesPerFrame : 0;
+                float duration = totalFrames / (float)wav.MixRate;
+                if (duration > 0f)
+                {
+                    var peaks = LazerSystem.Timeline.WaveformGenerator.GeneratePeaks(show.AudioClip, 100f, duration);
+                    _timelineUI.SetWaveformData(peaks);
+                }
+            }
+        }
+        else
+        {
+            GD.Print("[MainUI] No AudioClip on loaded show");
+            _timelineUI?.SetWaveformData(null);
+        }
+
+        // Clear undo history for new show
+        LazerSystem.Timeline.Commands.UndoManager.Instance.Clear();
+    }
+
+    private void OnAudioFileSelected(string path)
+    {
+        var pbm = PlaybackManager.Instance;
+        if (pbm == null)
+        {
+            GD.PrintErr("[MainUI] No PlaybackManager — cannot load audio.");
+            return;
+        }
+
+        // Ensure a show exists
+        if (pbm.LaserShow == null)
+            pbm.LaserShow = new LaserShow { ShowName = "Untitled Show", Bpm = 120f };
+
+        // Load the audio file from the filesystem path
+        AudioStream stream = null;
+
+        if (path.EndsWith(".wav", System.StringComparison.OrdinalIgnoreCase))
+        {
+            // For WAV files, load raw bytes and create AudioStreamWav
+            var file = FileAccess.Open(path, FileAccess.ModeFlags.Read);
+            if (file == null)
+            {
+                GD.PrintErr($"[MainUI] Failed to open audio file: {path}");
+                return;
+            }
+            var bytes = file.GetBuffer((long)file.GetLength());
+            file.Close();
+
+            stream = LoadWavFromBytes(bytes);
+        }
+        else
+        {
+            // Try loading as a Godot resource (works for .ogg/.mp3 imported into project)
+            if (ResourceLoader.Exists(path))
+                stream = ResourceLoader.Load<AudioStream>(path);
+        }
+
+        if (stream == null)
+        {
+            GD.PrintErr($"[MainUI] Could not load audio from: {path}");
+            return;
+        }
+
+        pbm.LaserShow.AudioClip = stream;
+        GD.Print($"[MainUI] Audio loaded: {path}");
+
+        // Set up the audio player
+        if (pbm.syncManager != null)
+        {
+            var player = FindAudioPlayer();
+            if (player == null)
+            {
+                player = new AudioStreamPlayer();
+                player.Name = "AudioPlayer";
+                GetTree().Root.AddChild(player);
+            }
+            player.Stream = stream;
+            pbm.syncManager.SetAudioPlayer(player);
+        }
+
+        // Generate waveform
+        if (stream is AudioStreamWav wav && _timelineUI != null)
+        {
+            int bytesPerFrame = (wav.Format == AudioStreamWav.FormatEnum.Format16Bits ? 2 : 1) * (wav.Stereo ? 2 : 1);
+            int totalFrames = wav.Data != null ? wav.Data.Length / bytesPerFrame : 0;
+            float duration = totalFrames / (float)wav.MixRate;
+            if (duration > 0f)
+            {
+                var peaks = LazerSystem.Timeline.WaveformGenerator.GeneratePeaks(stream, 100f, duration);
+                _timelineUI.SetWaveformData(peaks);
+            }
+        }
+        else
+        {
+            _timelineUI?.SetWaveformData(null);
+        }
+    }
+
+    private static AudioStreamWav LoadWavFromBytes(byte[] rawBytes)
+    {
+        // Minimal WAV parser — expects standard PCM format
+        if (rawBytes == null || rawBytes.Length < 44)
+            return null;
+
+        // Verify RIFF header
+        if (rawBytes[0] != 'R' || rawBytes[1] != 'I' || rawBytes[2] != 'F' || rawBytes[3] != 'F')
+            return null;
+        if (rawBytes[8] != 'W' || rawBytes[9] != 'A' || rawBytes[10] != 'V' || rawBytes[11] != 'E')
+            return null;
+
+        // Find fmt chunk
+        int pos = 12;
+        int channels = 1;
+        int sampleRate = 44100;
+        int bitsPerSample = 16;
+        byte[] dataBytes = null;
+
+        while (pos + 8 <= rawBytes.Length)
+        {
+            string chunkId = System.Text.Encoding.ASCII.GetString(rawBytes, pos, 4);
+            int chunkSize = rawBytes[pos + 4] | (rawBytes[pos + 5] << 8) | (rawBytes[pos + 6] << 16) | (rawBytes[pos + 7] << 24);
+
+            if (chunkId == "fmt ")
+            {
+                channels = rawBytes[pos + 10] | (rawBytes[pos + 11] << 8);
+                sampleRate = rawBytes[pos + 12] | (rawBytes[pos + 13] << 8) | (rawBytes[pos + 14] << 16) | (rawBytes[pos + 15] << 24);
+                bitsPerSample = rawBytes[pos + 22] | (rawBytes[pos + 23] << 8);
+            }
+            else if (chunkId == "data")
+            {
+                int dataStart = pos + 8;
+                int dataLen = Mathf.Min(chunkSize, rawBytes.Length - dataStart);
+                dataBytes = new byte[dataLen];
+                System.Array.Copy(rawBytes, dataStart, dataBytes, 0, dataLen);
+            }
+
+            pos += 8 + chunkSize;
+            if (chunkSize % 2 != 0) pos++; // WAV chunks are 2-byte aligned
+        }
+
+        if (dataBytes == null)
+            return null;
+
+        var wav = new AudioStreamWav();
+        wav.Data = dataBytes;
+        wav.Format = bitsPerSample == 8 ? AudioStreamWav.FormatEnum.Format8Bits : AudioStreamWav.FormatEnum.Format16Bits;
+        wav.Stereo = channels >= 2;
+        wav.MixRate = sampleRate;
+        wav.LoopMode = AudioStreamWav.LoopModeEnum.Disabled;
+
+        return wav;
+    }
+
+    private AudioStreamPlayer FindAudioPlayer()
+    {
+        // Try the scene node name first, then fall back to type search
+        var player = GetTree().Root.FindChild("AudioPlayer", true, false) as AudioStreamPlayer;
+        if (player == null)
+            player = GetTree().Root.FindChild("AudioStreamPlayer", true, false) as AudioStreamPlayer;
+        return player;
+    }
+
+    private void ConnectTimelineReferences()
+    {
+        var pbm = GetTree().Root.FindChild("PlaybackManager", true, false) as PlaybackManager;
+        var sm = GetTree().Root.FindChild("SyncManager", true, false) as SyncManager;
+        var zm = GetTree().Root.FindChild("ZoneManager", true, false) as LazerSystem.Zones.ZoneManager;
+        var anm = GetTree().Root.FindChild("ArtNetManager", true, false) as LazerSystem.ArtNet.ArtNetManager;
+        var pvm = GetTree().Root.FindChild("LaserPreviewManager", true, false) as LazerSystem.Preview.LaserPreviewManager;
+
+        if (pbm == null)
+        {
+            GD.Print("[MainUI] PlaybackManager not found — timeline features limited");
+            return;
+        }
+        if (sm == null)
+        {
+            GD.Print("[MainUI] SyncManager not found — timeline features limited");
+        }
+
+        // Wire PlaybackManager references that aren't set in the scene
+        if (pbm.syncManager == null && sm != null)
+            pbm.syncManager = sm;
+        if (pbm.zoneManager == null && zm != null)
+            pbm.zoneManager = zm;
+        if (pbm.artNetManager == null && anm != null)
+            pbm.artNetManager = anm;
+        if (pbm.previewManager == null && pvm != null)
+            pbm.previewManager = pvm;
+
+        // Wire AudioPlayer to SyncManager
+        if (sm != null)
+        {
+            var audioPlayer = FindAudioPlayer();
+            if (audioPlayer != null)
+                sm.SetAudioPlayer(audioPlayer);
+        }
+
+        // Wire TimelineUI references
+        if (_timelineUI != null)
+        {
+            _timelineUI.playbackManager = pbm;
+            _timelineUI.syncManager = sm;
+            _timelineUI.inspectorPanel = _inspectorPanel;
+        }
+
+        // Ensure a LaserShow exists and at least one track
+        if (pbm.LaserShow == null)
+        {
+            pbm.LaserShow = new LaserShow { ShowName = "Untitled Show", Bpm = 120f };
+        }
+        if (pbm.Tracks.Count == 0)
+        {
+            pbm.Tracks.Add(new TimelineTrack { trackName = "Track 1", zoneIndex = 0 });
+        }
+    }
+
+    private void SwitchViewMode(ViewMode mode)
+    {
+        if (_viewMode == mode)
+            return;
+
+        _viewMode = mode;
+
+        _liveContent.Visible = (mode == ViewMode.Live);
+        _timelineContent.Visible = (mode == ViewMode.Timeline);
+
+        // Update button styles
+        StyleButton(_liveViewBtn, mode == ViewMode.Live ? ActiveGreen : new Color(0.3f, 0.3f, 0.35f, 1f));
+        StyleButton(_timelineViewBtn, mode == ViewMode.Timeline ? ActiveGreen : new Color(0.3f, 0.3f, 0.35f, 1f));
     }
 
     // ═══════════════════════════════════════════════
@@ -813,6 +1410,7 @@ public partial class MainUI : CanvasLayer
         _boundsToggle.Toggled += (pressed) =>
         {
             _showBounds = pressed;
+            if (_timelineBoundsToggle != null) _timelineBoundsToggle.SetPressedNoSignal(pressed);
             var venueGrid = GetTree().Root.FindChild("VenueGrid", true, false) as LazerSystem.Preview.VenueGrid;
             venueGrid?.SetShowBounds(pressed);
         };
@@ -888,6 +1486,142 @@ public partial class MainUI : CanvasLayer
         slider.CustomMinimumSize = new Vector2(0, 16);
         slider.ValueChanged += handler;
         parent.AddChild(slider);
+    }
+
+    private void BuildTimelinePreviewSettings(VBoxContainer parent)
+    {
+        var bgPanel = new PanelContainer();
+        var bgStyle = new StyleBoxFlat();
+        bgStyle.BgColor = new Color(0.1f, 0.1f, 0.13f, 0.9f);
+        bgStyle.SetCornerRadiusAll(4);
+        bgStyle.SetContentMarginAll(6);
+        bgPanel.AddThemeStyleboxOverride("panel", bgStyle);
+        parent.AddChild(bgPanel);
+
+        var vbox = new VBoxContainer();
+        vbox.AddThemeConstantOverride("separation", 5);
+        bgPanel.AddChild(vbox);
+
+        // Source Beams toggle
+        var beamToggle = new CheckButton();
+        beamToggle.Text = "Show Source Beams";
+        beamToggle.ButtonPressed = false;
+        beamToggle.AddThemeColorOverride("font_color", TextColor);
+        beamToggle.AddThemeFontSizeOverride("font_size", 11);
+        beamToggle.Toggled += (pressed) =>
+        {
+            var preview3D = GetTree().Root.FindChild("Preview3D", true, false);
+            if (preview3D == null) return;
+            for (int i = 0; i < 4; i++)
+            {
+                var r = preview3D.GetNodeOrNull<LazerSystem.Preview.LaserPreviewRenderer>($"Projector{i + 1}");
+                r?.SetShowSourceBeams(pressed);
+            }
+        };
+        vbox.AddChild(beamToggle);
+
+        // Haze Density slider
+        var hazeRow = new HBoxContainer();
+        hazeRow.AddThemeConstantOverride("separation", 6);
+        vbox.AddChild(hazeRow);
+
+        var hazeLabel = new Label();
+        hazeLabel.Text = "Haze Density";
+        hazeLabel.CustomMinimumSize = new Vector2(80, 0);
+        hazeLabel.HorizontalAlignment = HorizontalAlignment.Right;
+        hazeLabel.AddThemeColorOverride("font_color", TextColor);
+        hazeLabel.AddThemeFontSizeOverride("font_size", 11);
+        hazeRow.AddChild(hazeLabel);
+
+        var hazeSlider = new HSlider();
+        hazeSlider.MinValue = 0;
+        hazeSlider.MaxValue = 50;
+        hazeSlider.Value = 10;
+        hazeSlider.Step = 1;
+        hazeSlider.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        hazeSlider.CustomMinimumSize = new Vector2(0, 20);
+        hazeRow.AddChild(hazeSlider);
+
+        var hazeValueLabel = new Label();
+        hazeValueLabel.Text = "1.0%";
+        hazeValueLabel.CustomMinimumSize = new Vector2(45, 0);
+        hazeValueLabel.HorizontalAlignment = HorizontalAlignment.Left;
+        hazeValueLabel.AddThemeColorOverride("font_color", TextColor);
+        hazeValueLabel.AddThemeFontSizeOverride("font_size", 11);
+        hazeRow.AddChild(hazeValueLabel);
+
+        hazeSlider.ValueChanged += (val) =>
+        {
+            float pct = (float)(val / 10.0);
+            hazeValueLabel.Text = $"{pct:F1}%";
+            float density = (float)(val / 1000.0);
+            var preview3D = GetTree().Root.FindChild("Preview3D", true, false);
+            if (preview3D == null) return;
+            for (int i = 0; i < 4; i++)
+            {
+                var r = preview3D.GetNodeOrNull<LazerSystem.Preview.LaserPreviewRenderer>($"Projector{i + 1}");
+                if (r != null) r.HazeDensity = density;
+            }
+        };
+
+        // Venue Bounds toggle
+        _timelineBoundsToggle = new CheckButton();
+        _timelineBoundsToggle.Text = "Show Venue Bounds (Tab)";
+        _timelineBoundsToggle.ButtonPressed = _showBounds;
+        _timelineBoundsToggle.AddThemeColorOverride("font_color", TextColor);
+        _timelineBoundsToggle.AddThemeFontSizeOverride("font_size", 11);
+        _timelineBoundsToggle.Toggled += (pressed) =>
+        {
+            _showBounds = pressed;
+            // Keep both toggles in sync
+            if (_boundsToggle != null) _boundsToggle.SetPressedNoSignal(pressed);
+            var venueGrid = GetTree().Root.FindChild("VenueGrid", true, false) as LazerSystem.Preview.VenueGrid;
+            venueGrid?.SetShowBounds(pressed);
+        };
+        vbox.AddChild(_timelineBoundsToggle);
+
+        // Projector Transform
+        var posHeader = new Label();
+        posHeader.Text = "Projector Transform";
+        posHeader.AddThemeColorOverride("font_color", ActiveGreen);
+        posHeader.AddThemeFontSizeOverride("font_size", 11);
+        vbox.AddChild(posHeader);
+
+        string[] projNames = { "P1", "P2", "P3", "P4" };
+        Color[] projColors = {
+            new Color(0.9f, 0.3f, 0.3f, 1f),
+            new Color(0.3f, 0.9f, 0.4f, 1f),
+            new Color(0.3f, 0.5f, 0.9f, 1f),
+            new Color(0.9f, 0.85f, 0.3f, 1f)
+        };
+        float[] defaultX = { -3f, -1f, 1f, 3f };
+
+        for (int i = 0; i < 4; i++)
+        {
+            int idx = i;
+
+            var pLabel = new Label();
+            pLabel.Text = projNames[i];
+            pLabel.AddThemeColorOverride("font_color", projColors[i]);
+            pLabel.AddThemeFontSizeOverride("font_size", 11);
+            vbox.AddChild(pLabel);
+
+            var posRow = new HBoxContainer();
+            posRow.AddThemeConstantOverride("separation", 3);
+            vbox.AddChild(posRow);
+
+            AddAxisSlider(posRow, "X", -20, 20, defaultX[i], 0.5, (val) => UpdateProjectorTransform(idx, posX: (float)val));
+            AddAxisSlider(posRow, "Y", 0, 15, 4, 0.5, (val) => UpdateProjectorTransform(idx, posY: (float)val));
+            AddAxisSlider(posRow, "Z", -20, 20, 0, 0.5, (val) => UpdateProjectorTransform(idx, posZ: (float)val));
+
+            var rotRow = new HBoxContainer();
+            rotRow.AddThemeConstantOverride("separation", 3);
+            vbox.AddChild(rotRow);
+
+            AddAxisSlider(rotRow, "RX", -180, 180, 0, 1, (val) => UpdateProjectorTransform(idx, rotX: (float)val));
+            AddAxisSlider(rotRow, "RY", -180, 180, 0, 1, (val) => UpdateProjectorTransform(idx, rotY: (float)val));
+            AddAxisSlider(rotRow, "RZ", -180, 180, 0, 1, (val) => UpdateProjectorTransform(idx, rotZ: (float)val));
+        }
     }
 
     // Store intended rotation per projector (degrees) to avoid Euler decomposition issues
@@ -1026,11 +1760,28 @@ public partial class MainUI : CanvasLayer
     {
         if (@event is InputEventKey keyEvent && keyEvent.Pressed && !keyEvent.Echo)
         {
+            // Spacebar: play/pause toggle (timeline view)
+            // Playing → pause in place, paused/stopped → play/resume
+            if (keyEvent.Keycode == Key.Space && _viewMode == ViewMode.Timeline)
+            {
+                var pbm = PlaybackManager.Instance;
+                if (pbm != null)
+                {
+                    if (pbm.IsPlaying && !pbm.IsPaused)
+                        pbm.PauseShow();
+                    else
+                        pbm.PlayShow();
+                }
+                GetViewport().SetInputAsHandled();
+                return;
+            }
+
             // Tab: toggle venue boundary surfaces
             if (keyEvent.Keycode == Key.Tab)
             {
                 _showBounds = !_showBounds;
                 if (_boundsToggle != null) _boundsToggle.SetPressedNoSignal(_showBounds);
+                if (_timelineBoundsToggle != null) _timelineBoundsToggle.SetPressedNoSignal(_showBounds);
                 var venueGrid = GetTree().Root.FindChild("VenueGrid", true, false) as LazerSystem.Preview.VenueGrid;
                 venueGrid?.SetShowBounds(_showBounds);
                 GetViewport().SetInputAsHandled();
@@ -1113,6 +1864,7 @@ public partial class MainUI : CanvasLayer
             _uiUpdateAccumulator -= UiUpdateInterval;
             UpdateToolbar();
             UpdateStatusBar();
+            UpdateTransportDisplay();
         }
     }
 
@@ -1237,6 +1989,32 @@ public partial class MainUI : CanvasLayer
         var zones = LiveEngine.Instance.ActiveZones;
         string zoneStr = zones.Length >= 4 ? "ALL" : string.Join(", ", System.Array.ConvertAll(zones, z => $"Z{z + 1}"));
         _statusLabel.Text = $"{pageName} | Active: {activeCues} cues | Laser: {(laserOn ? "ON" : "OFF")} | Zones: {zoneStr}";
+    }
+
+    private void UpdateTransportDisplay()
+    {
+        if (_viewMode != ViewMode.Timeline)
+            return;
+
+        var pbm = PlaybackManager.Instance;
+        if (pbm == null)
+            return;
+
+        float t = pbm.CurrentTime;
+        int minutes = Mathf.FloorToInt(t / 60f);
+        int seconds = Mathf.FloorToInt(t % 60f);
+        int frames = Mathf.FloorToInt(t * 30f) % 30;
+
+        if (_transportTimeLabel != null)
+            _transportTimeLabel.Text = $"{minutes:D2}:{seconds:D2}:{frames:D2}";
+
+        if (_transportBeatLabel != null)
+        {
+            int beat = pbm.CurrentBeat;
+            int bar = beat / 4 + 1;
+            int beatInBar = beat % 4 + 1;
+            _transportBeatLabel.Text = $"{bar}.{beatInBar}";
+        }
     }
 
     private int CountActiveCues()

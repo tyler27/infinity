@@ -30,12 +30,12 @@ namespace LazerSystem.Timeline
         }
 
         [ExportGroup("References")]
-        [Export] private LaserShow laserShow;
-        [Export] private SyncManager syncManager;
+        [Export] public LaserShow laserShow;
+        [Export] public SyncManager syncManager;
         // PatternFactory is a static class; no serialized reference needed.
-        [Export] private ZoneManager zoneManager;
-        [Export] private ArtNetManager artNetManager;
-        [Export] private LaserPreviewManager previewManager;
+        [Export] public ZoneManager zoneManager;
+        [Export] public ArtNetManager artNetManager;
+        [Export] public LaserPreviewManager previewManager;
 
         [ExportGroup("Playback State")]
         [Export] private bool isPlaying;
@@ -49,6 +49,9 @@ namespace LazerSystem.Timeline
 
         // Internal typed list mirroring the export for convenience
         private List<TimelineTrack> _tracks = new List<TimelineTrack>();
+
+        // Track which zones had output last frame so we can clear idle ones
+        private HashSet<int> _activeZonesLastFrame = new HashSet<int>();
 
         public LaserShow LaserShow
         {
@@ -109,11 +112,15 @@ namespace LazerSystem.Timeline
                 foreach (var t in tracks)
                     _tracks.Add(t);
             }
+
+            // Run after LiveEngine (default priority 0) so timeline output
+            // renders on top of / after live cue output.
+            ProcessPriority = 100;
         }
 
         public override void _Process(double delta)
         {
-            if (!isPlaying || isPaused)
+            if (!isPlaying)
                 return;
 
             float currentTime = CurrentTime;
@@ -140,9 +147,18 @@ namespace LazerSystem.Timeline
             // Collect active blocks per zone for blending
             var zonePoints = new Dictionary<int, List<LaserPoint>>();
 
+            // Check if any track is soloed
+            bool anySolo = false;
+            foreach (var t in _tracks)
+            {
+                if (t.solo) { anySolo = true; break; }
+            }
+
             foreach (var track in _tracks)
             {
                 if (track.muted)
+                    continue;
+                if (anySolo && !track.solo)
                     continue;
 
                 var activeBlocks = track.GetActiveBlocks(currentTime);
@@ -151,10 +167,16 @@ namespace LazerSystem.Timeline
                 {
                     if (block.Cue == null)
                         continue;
+                    if (block.Muted)
+                        continue;
 
                     // Generate pattern points
                     var parameters = PatternParameters.FromCue(block.Cue);
                     parameters.intensity *= track.volume;
+
+                    // Apply fade in/out multiplier
+                    float fadeMult = ComputeFadeMultiplier(block, currentTime);
+                    parameters.intensity *= fadeMult;
 
                     float localTime = currentTime - block.StartTime;
                     List<LaserPoint> points = GeneratePatternPoints(block.Cue.PatternType, localTime, parameters);
@@ -185,11 +207,33 @@ namespace LazerSystem.Timeline
                 }
             }
 
+            // Clear zones that were active last frame but have no output now
+            foreach (int prevZone in _activeZonesLastFrame)
+            {
+                if (!zonePoints.ContainsKey(prevZone))
+                {
+                    if (previewManager != null)
+                    {
+                        var renderer = previewManager.GetRenderer(prevZone);
+                        renderer?.Clear();
+                    }
+                    if (artNetManager != null)
+                    {
+                        byte[] blackout = ConvertPointsToDmx(prevZone, new List<LaserPoint>());
+                        artNetManager.SendDmx(prevZone, blackout);
+                    }
+                }
+            }
+
+            _activeZonesLastFrame.Clear();
+
             // Send output to preview and ArtNet
             foreach (var kvp in zonePoints)
             {
                 int zoneIndex = kvp.Key;
                 var points = kvp.Value;
+
+                _activeZonesLastFrame.Add(zoneIndex);
 
                 // Send to preview renderer
                 if (previewManager != null)
@@ -364,12 +408,123 @@ namespace LazerSystem.Timeline
             );
         }
 
+        /// <summary>
+        /// Computes a 0-1 fade multiplier for a block based on its fade in/out durations.
+        /// </summary>
+        private float ComputeFadeMultiplier(LaserCueBlock block, float currentTime)
+        {
+            float localTime = currentTime - block.StartTime;
+            float mult = 1f;
+
+            if (block.FadeInDuration > 0f && localTime < block.FadeInDuration)
+            {
+                mult *= Mathf.Clamp(localTime / block.FadeInDuration, 0f, 1f);
+            }
+
+            if (block.FadeOutDuration > 0f)
+            {
+                float timeUntilEnd = block.Duration - localTime;
+                if (timeUntilEnd < block.FadeOutDuration)
+                {
+                    mult *= Mathf.Clamp(timeUntilEnd / block.FadeOutDuration, 0f, 1f);
+                }
+            }
+
+            return mult;
+        }
+
+        /// <summary>Saves the current show to a .tres resource file.</summary>
+        public Error SaveShow(string path)
+        {
+            if (laserShow == null)
+            {
+                GD.PrintErr("[PlaybackManager] No show to save.");
+                return Error.InvalidData;
+            }
+
+            // Sync tracks back to the show's TimelineBlocks before saving
+            laserShow.TimelineBlocks.Clear();
+            for (int i = 0; i < _tracks.Count; i++)
+            {
+                var track = _tracks[i];
+                if (track.blocks == null) continue;
+                foreach (var block in track.blocks)
+                {
+                    block.TrackIndex = i;
+                    laserShow.TimelineBlocks.Add(block);
+                }
+            }
+
+            GD.Print($"[PlaybackManager] Saving show '{laserShow.ShowName}' with {laserShow.TimelineBlocks.Count} blocks to {path}");
+
+            var err = ResourceSaver.Save(laserShow, path);
+            if (err == Error.Ok)
+                GD.Print($"[PlaybackManager] Show saved successfully.");
+            else
+                GD.PrintErr($"[PlaybackManager] Failed to save show: {err}");
+            return err;
+        }
+
+        /// <summary>Loads a show from a .tres resource file and binds it.</summary>
+        public Error LoadShow(string path)
+        {
+            if (!ResourceLoader.Exists(path))
+            {
+                GD.PrintErr($"[PlaybackManager] File not found: {path}");
+                return Error.FileNotFound;
+            }
+
+            var resource = ResourceLoader.Load<LaserShow>(path);
+            if (resource == null)
+            {
+                GD.PrintErr($"[PlaybackManager] Failed to load show from {path}");
+                return Error.CantOpen;
+            }
+
+            laserShow = resource;
+            GD.Print($"[PlaybackManager] Loaded show '{laserShow.ShowName}', TimelineBlocks={laserShow.TimelineBlocks?.Count ?? 0}");
+
+            // Rebuild tracks from loaded blocks
+            _tracks.Clear();
+            tracks.Clear();
+
+            if (laserShow.TimelineBlocks != null)
+            {
+                var trackMap = new Dictionary<int, TimelineTrack>();
+                foreach (var block in laserShow.TimelineBlocks)
+                {
+                    if (!trackMap.ContainsKey(block.TrackIndex))
+                    {
+                        var track = new TimelineTrack
+                        {
+                            trackName = $"Track {block.TrackIndex + 1}",
+                            zoneIndex = block.ZoneIndex
+                        };
+                        trackMap[block.TrackIndex] = track;
+                    }
+                    trackMap[block.TrackIndex].AddBlock(block);
+                }
+
+                // Add tracks in index order
+                var sortedKeys = new List<int>(trackMap.Keys);
+                sortedKeys.Sort();
+                foreach (var key in sortedKeys)
+                {
+                    _tracks.Add(trackMap[key]);
+                    tracks.Add(trackMap[key]);
+                }
+            }
+
+            GD.Print($"[PlaybackManager] Show loaded from {path}: {laserShow.ShowName}");
+            return Error.Ok;
+        }
+
         /// <summary>Starts or resumes playback of the current show.</summary>
         public void PlayShow()
         {
             if (laserShow == null)
             {
-                GD.Print("[PlaybackManager] No show loaded.");
+                GD.Print("[PlaybackManager] No show loaded — cannot play.");
                 return;
             }
 
@@ -379,9 +534,12 @@ namespace LazerSystem.Timeline
             if (syncManager != null)
             {
                 syncManager.Play();
+                GD.Print($"[PlaybackManager] Playback started. tracks={_tracks.Count}, syncMgr={syncManager != null}, previewMgr={previewManager != null}");
             }
-
-            GD.Print("[PlaybackManager] Playback started.");
+            else
+            {
+                GD.Print("[PlaybackManager] Playback started but NO SyncManager — time won't advance!");
+            }
         }
 
         /// <summary>Stops playback and resets to the beginning.</summary>
@@ -400,6 +558,7 @@ namespace LazerSystem.Timeline
             {
                 previewManager.ClearAll();
             }
+            _activeZonesLastFrame.Clear();
 
             GD.Print("[PlaybackManager] Playback stopped.");
         }
