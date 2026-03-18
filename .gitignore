@@ -62,9 +62,6 @@ desktop.ini
 *.bak
 *.log
 
-# Claude
-.claude/
-
 # Unity activation files
 *.alf
 

@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:forum.unity.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:discussions.unity.com)",
+      "WebFetch(domain:docs.unity3d.com)",
+      "WebFetch(domain:art-net.org.uk)",
+      "WebFetch(domain:wiki.pangolin.com)",
+      "Bash(dotnet build:*)",
+      "Bash(ls -lt /c/Users/Tyler/Downloads/*.mp3 /c/Users/Tyler/Downloads/*.wav /c/Users/Tyler/Downloads/*.ogg /c/Users/Tyler/Downloads/*.m4a)",
+      "Bash(where ffmpeg:*)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Users/Tyler/**)",
+      "WebFetch(domain:pangolin.com)",
+      "WebFetch(domain:laseros.com)",
+      "WebFetch(domain:forums.pangolin.com)",
+      "WebFetch(domain:www.laserist.org)",
+      "WebFetch(domain:www.laserworld.com)",
+      "WebFetch(domain:www.pangolin.com)",
+      "WebFetch(domain:laserworld.com)",
+      "WebFetch(domain:photonlexicon.com)",
+      "WebFetch(domain:www.bax-shop.co.uk)",
+      "WebFetch(domain:www.sweetwater.com)",
+      "WebFetch(domain:www.bhphotovideo.com)",
+      "WebFetch(domain:www.reddit.com)",
+      "WebFetch(domain:lasershowprojector.com)",
+      "Bash(find C:UsersTylerDevelopmenttylerlazer -type f -name *[Vv]enue* -o -name *[Rr]oom*)",
+      "WebFetch(domain:help.malighting.com)",
+      "WebFetch(domain:en.wikipedia.org)",
+      "WebFetch(domain:www.ableton.com)",
+      "WebFetch(domain:helpx.adobe.com)",
+      "WebFetch(domain:www.malighting.com)",
+      "WebFetch(domain:www.youtube.com)",
+      "WebFetch(domain:help2.malighting.com)",
+      "Bash(ccusage daily:*)",
+      "Bash(node -e \":*)",
+      "Bash(date -v-30d +%Y%m%d)",
+      "Bash(bash \"C:/Users/Tyler/Development/tyler/lazer/.claude/skills/start-lazer/launch.sh\")"
+    ]
+  }
+}
