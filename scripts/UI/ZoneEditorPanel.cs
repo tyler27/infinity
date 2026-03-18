@@ -492,6 +492,14 @@ public partial class ZoneEditorPanel : FloatingPanel
         _safetyBottomSlider.SetValueNoSignal(sz.End.Y * 100.0);
         _safetyBottomValue.Text = $"{(int)(sz.End.Y * 100.0)}";
 
+        // Sync boundary button state with this zone's projector renderer
+        var renderer = GetRendererForZone(zone.ProjectorIndex);
+        _showingBoundary = renderer != null && renderer.ShowZoneBoundary;
+        StyleButton(_showBoundaryBtn, _showingBoundary ? ActiveGreen : CueDefault);
+        _showBoundaryBtn.Text = _showingBoundary ? "Hide Zone Boundary" : "Show Zone Boundary";
+        _showBoundaryBtn.AddThemeColorOverride("font_color",
+            _showingBoundary ? Colors.Black : TextColor);
+
         RefreshZoneList();
     }
 
@@ -621,6 +629,18 @@ public partial class ZoneEditorPanel : FloatingPanel
                 renderer.SetShowZoneBoundary(_showingAllBoundaries);
                 renderer.SetZoneColor(GetProjectorColor(i));
             }
+        }
+
+        // Sync per-zone button to match
+        var selectedZone = GetSelectedZone();
+        if (selectedZone != null)
+        {
+            var selRenderer = GetRendererForZone(selectedZone.ProjectorIndex);
+            _showingBoundary = selRenderer != null && selRenderer.ShowZoneBoundary;
+            StyleButton(_showBoundaryBtn, _showingBoundary ? ActiveGreen : CueDefault);
+            _showBoundaryBtn.Text = _showingBoundary ? "Hide Zone Boundary" : "Show Zone Boundary";
+            _showBoundaryBtn.AddThemeColorOverride("font_color",
+                _showingBoundary ? Colors.Black : TextColor);
         }
     }
 
