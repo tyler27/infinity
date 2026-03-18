@@ -4,6 +4,7 @@ using LazerSystem.Core;
 using LazerSystem.Patterns;
 using LazerSystem.Preview;
 using LazerSystem.ArtNet;
+using LazerSystem.Timeline;
 
 /// <summary>
 /// Core live performance engine. Manages active cues, generates patterns,
@@ -324,6 +325,9 @@ public partial class LiveEngine : Node
 		}
 
 		// Render and send DMX for each projector
+		// When PlaybackManager is playing, skip clearing renderers so timeline output persists
+		bool timelinePlaying = PlaybackManager.Instance != null && PlaybackManager.Instance.IsPlaying && !PlaybackManager.Instance.IsPaused;
+
 		for (int i = 0; i < ProjectorCount; i++)
 		{
 			if (_projectorHasOutput[i] && _projectorPoints[i].Count > 0)
@@ -333,7 +337,7 @@ public partial class LiveEngine : Node
 
 				SendProjectorDmx(i);
 			}
-			else
+			else if (!timelinePlaying)
 			{
 				if (_renderers[i] != null)
 					_renderers[i].Clear();

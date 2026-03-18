@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Godot;
 using LazerSystem.Core;
 using LazerSystem.Timeline;
@@ -47,10 +48,17 @@ namespace LazerSystem.UI
 
         // Selection / drag
         private LaserCueBlock selectedBlock;
+        private HashSet<LaserCueBlock> selectedBlocks = new();
         private LaserCueBlock draggingBlock;
         private bool isDragging;
         private float dragStartTime;
         private float dragOffsetX;
+        private Dictionary<LaserCueBlock, float> multiDragOriginalStarts = new();
+
+        // Rubber-band selection
+        private bool isRubberBanding;
+        private Vector2 rubberBandStart;
+        private Vector2 rubberBandEnd;
 
         // Resize state
         private enum ResizeEdge { None, Left, Right }
@@ -60,6 +68,7 @@ namespace LazerSystem.UI
         private float resizeOriginalStart;
         private float resizeOriginalDuration;
         private const float EdgeThresholdPx = 6f;
+        private Dictionary<LaserCueBlock, (float start, float duration)> multiResizeOriginals = new();
 
         // Context menu (pattern placement)
         private PopupMenu contextMenu;
@@ -96,6 +105,27 @@ namespace LazerSystem.UI
         private enum LoopDragHandle { None, Start, End }
         private LoopDragHandle loopDragHandle = LoopDragHandle.None;
         private bool isDraggingLoop;
+        private float loopDragAnchorTime; // the initial click time when Ctrl+click-dragging a new loop
+
+        // Automation mode
+        private bool automationEditMode;
+        private string activeAutomationParam = "Intensity";
+        private int selectedKeyframeIndex = -1;
+        private AutomationLane selectedKeyframeLane;
+        private bool isDraggingKeyframe;
+        private float dragKfOriginalTime;
+        private float dragKfOriginalValue;
+
+        // Keyframe context menu
+        private PopupMenu keyframeContextMenu;
+        private AutomationKeyframe contextKeyframe;
+        private AutomationLane contextKeyframeLane;
+        private int contextKeyframeIndex;
+
+        // Color automation picker popup
+        private PopupPanel colorAutoPopup;
+        private ColorPicker colorAutoPicker;
+        private float colorAutoNormalizedTime;
 
         public override void _Ready()
         {
@@ -121,6 +151,24 @@ namespace LazerSystem.UI
             rulerContextMenu = new PopupMenu();
             AddChild(rulerContextMenu);
             rulerContextMenu.IdPressed += OnRulerContextMenuItemSelected;
+
+            // Keyframe context menu
+            keyframeContextMenu = new PopupMenu();
+            AddChild(keyframeContextMenu);
+            keyframeContextMenu.IdPressed += OnKeyframeContextMenuItemSelected;
+
+            // Color automation picker
+            colorAutoPopup = new PopupPanel();
+            colorAutoPopup.Size = new Vector2I(250, 280);
+            var colorVBox = new VBoxContainer();
+            colorAutoPicker = new ColorPicker();
+            colorAutoPicker.CustomMinimumSize = new Vector2(240, 220);
+            colorVBox.AddChild(colorAutoPicker);
+            var confirmBtn = new Button { Text = "Add Color Keyframe" };
+            confirmBtn.Pressed += OnColorAutoConfirmed;
+            colorVBox.AddChild(confirmBtn);
+            colorAutoPopup.AddChild(colorVBox);
+            AddChild(colorAutoPopup);
         }
 
         public override void _Process(double delta)
@@ -149,10 +197,23 @@ namespace LazerSystem.UI
                     return;
                 }
 
+                // Deselect all
+                if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.D)
+                {
+                    SelectBlock(null);
+                    if (syncManager != null && syncManager.HasLoopRegion)
+                        syncManager.ClearLoopRegion();
+                    GetViewport().SetInputAsHandled();
+                    return;
+                }
+
                 // Copy/Paste
                 if (keyEvent.CtrlPressed && keyEvent.Keycode == Key.C && selectedBlock != null)
                 {
-                    ClipboardManager.Copy(selectedBlock);
+                    if (selectedBlocks.Count > 1)
+                        ClipboardManager.CopyMultiple(selectedBlocks);
+                    else
+                        ClipboardManager.Copy(selectedBlock);
                     GetViewport().SetInputAsHandled();
                     return;
                 }
@@ -191,12 +252,40 @@ namespace LazerSystem.UI
                     return;
                 }
 
-                // Delete
-                if (keyEvent.Keycode == Key.Delete && selectedBlock != null)
+                // Toggle automation edit mode
+                if (keyEvent.Keycode == Key.A && !keyEvent.CtrlPressed)
                 {
-                    DeleteSelectedBlock();
+                    automationEditMode = !automationEditMode;
+                    selectedKeyframeIndex = -1;
+                    selectedKeyframeLane = null;
                     GetViewport().SetInputAsHandled();
                     return;
+                }
+
+                // Delete keyframe or block
+                if (keyEvent.Keycode == Key.Delete)
+                {
+                    if (automationEditMode && selectedKeyframeIndex >= 0 && selectedKeyframeLane != null)
+                    {
+                        var cmd = new RemoveKeyframeCommand(selectedKeyframeLane, selectedKeyframeIndex);
+                        UndoManager.Instance.ExecuteCommand(cmd);
+                        selectedKeyframeIndex = -1;
+                        selectedKeyframeLane = null;
+                        GetViewport().SetInputAsHandled();
+                        return;
+                    }
+                    if (selectedBlocks.Count > 1)
+                    {
+                        DeleteSelectedBlocks();
+                        GetViewport().SetInputAsHandled();
+                        return;
+                    }
+                    if (selectedBlock != null)
+                    {
+                        DeleteSelectedBlock();
+                        GetViewport().SetInputAsHandled();
+                        return;
+                    }
                 }
             }
         }
@@ -269,7 +358,7 @@ namespace LazerSystem.UI
                 else if (mouseButton.ButtonIndex == MouseButton.Left)
                 {
                     GrabFocus();
-                    HandleLeftClick(mouseButton.Position, mouseButton.CtrlPressed);
+                    HandleLeftClick(mouseButton.Position, mouseButton.CtrlPressed, mouseButton.ShiftPressed);
                     AcceptEvent();
                 }
                 else if (mouseButton.ButtonIndex == MouseButton.Right && mouseButton.Pressed)
@@ -281,16 +370,57 @@ namespace LazerSystem.UI
             }
             else if (!mouseButton.Pressed)
             {
+                if (isDraggingKeyframe && selectedKeyframeLane != null && selectedKeyframeIndex >= 0)
+                {
+                    var kf = selectedKeyframeLane.Keyframes[selectedKeyframeIndex];
+                    float newTime = kf.Time;
+                    float newValue = kf.Value;
+                    if (newTime != dragKfOriginalTime || newValue != dragKfOriginalValue)
+                    {
+                        // Revert so command.Execute sets new values
+                        kf.Time = dragKfOriginalTime;
+                        kf.Value = dragKfOriginalValue;
+                        var cmd = new MoveKeyframeCommand(selectedKeyframeLane, selectedKeyframeIndex,
+                            dragKfOriginalTime, dragKfOriginalValue, newTime, newValue);
+                        UndoManager.Instance.ExecuteCommand(cmd);
+                    }
+                    isDraggingKeyframe = false;
+                }
                 if (isResizing)
                 {
-                    // Commit resize command
-                    if (resizingBlock != null)
+                    // Commit resize command(s)
+                    if (multiResizeOriginals.Count > 1)
+                    {
+                        // Multi-block resize: compound command
+                        var commands = new List<ITimelineCommand>();
+                        bool anyChanged = false;
+                        foreach (var kvp in multiResizeOriginals)
+                        {
+                            var blk = kvp.Key;
+                            float origStart = kvp.Value.start;
+                            float origDur = kvp.Value.duration;
+                            float curStart = blk.StartTime;
+                            float curDur = blk.Duration;
+                            if (curStart != origStart || curDur != origDur)
+                            {
+                                blk.StartTime = origStart;
+                                blk.Duration = origDur;
+                                commands.Add(new ResizeBlockCommand(blk, origStart, origDur, curStart, curDur));
+                                anyChanged = true;
+                            }
+                        }
+                        if (anyChanged)
+                        {
+                            var compound = new CompoundCommand("Resize Blocks", commands);
+                            UndoManager.Instance.ExecuteCommand(compound);
+                        }
+                    }
+                    else if (resizingBlock != null)
                     {
                         float newStart = resizingBlock.StartTime;
                         float newDuration = resizingBlock.Duration;
                         if (newStart != resizeOriginalStart || newDuration != resizeOriginalDuration)
                         {
-                            // Revert to original so command.Execute sets new values
                             resizingBlock.StartTime = resizeOriginalStart;
                             resizingBlock.Duration = resizeOriginalDuration;
                             var cmd = new ResizeBlockCommand(resizingBlock, resizeOriginalStart, resizeOriginalDuration, newStart, newDuration);
@@ -300,11 +430,37 @@ namespace LazerSystem.UI
                     isResizing = false;
                     resizingBlock = null;
                     resizeEdge = ResizeEdge.None;
+                    multiResizeOriginals.Clear();
                 }
                 if (isDragging)
                 {
-                    // Commit move command
-                    if (draggingBlock != null)
+                    // Commit move command(s)
+                    if (draggingBlock != null && selectedBlocks.Count > 1 && multiDragOriginalStarts.Count > 0)
+                    {
+                        // Multi-block move: create compound command
+                        var commands = new List<ITimelineCommand>();
+                        bool anyMoved = false;
+                        foreach (var blk in selectedBlocks)
+                        {
+                            if (multiDragOriginalStarts.TryGetValue(blk, out float origStart))
+                            {
+                                float curStart = blk.StartTime;
+                                if (curStart != origStart)
+                                {
+                                    blk.StartTime = origStart;
+                                    commands.Add(new MoveBlockCommand(blk, origStart, curStart));
+                                    anyMoved = true;
+                                }
+                            }
+                        }
+                        if (anyMoved)
+                        {
+                            var compound = new CompoundCommand("Move Blocks", commands);
+                            UndoManager.Instance.ExecuteCommand(compound);
+                        }
+                        multiDragOriginalStarts.Clear();
+                    }
+                    else if (draggingBlock != null)
                     {
                         float newStart = draggingBlock.StartTime;
                         if (newStart != dragStartTime)
@@ -325,6 +481,17 @@ namespace LazerSystem.UI
                 {
                     isDraggingLoop = false;
                     loopDragHandle = LoopDragHandle.None;
+                    loopDragAnchorTime = -1f;
+
+                    // Clear if region is too tiny (< 0.05s)
+                    if (syncManager != null && syncManager.LoopEndTime - syncManager.LoopStartTime < 0.05f)
+                    {
+                        syncManager.ClearLoopRegion();
+                    }
+                }
+                if (isRubberBanding)
+                {
+                    isRubberBanding = false;
                 }
             }
         }
@@ -333,15 +500,46 @@ namespace LazerSystem.UI
         {
             var pos = mouseMotion.Position;
 
+            if (isDraggingKeyframe && selectedKeyframeLane != null && selectedKeyframeIndex >= 0 && selectedBlock != null)
+            {
+                float contentX = pos.X - trackHeaderWidth;
+                float blockXPos = (selectedBlock.StartTime - scrollOffset) * pixelsPerSecond;
+                float blockWidth = selectedBlock.Duration * pixelsPerSecond;
+                float normalizedTime = Mathf.Clamp((contentX - blockXPos) / blockWidth, 0f, 1f);
+
+                float trackY = selectedBlock.TrackIndex * trackHeight + RulerHeight + 2;
+                float blockH = trackHeight - 4;
+                float yInBlock = pos.Y - trackY;
+                float valueFraction = 1f - Mathf.Clamp(yInBlock / blockH, 0f, 1f);
+
+                var paramDef = AutomatableParameter.Find(activeAutomationParam);
+                float value = paramDef != null
+                    ? paramDef.Value.Min + valueFraction * (paramDef.Value.Max - paramDef.Value.Min)
+                    : valueFraction;
+
+                selectedKeyframeLane.Keyframes[selectedKeyframeIndex].Time = normalizedTime;
+                selectedKeyframeLane.Keyframes[selectedKeyframeIndex].Value = value;
+                AcceptEvent();
+                return;
+            }
+
             if (isDraggingLoop && syncManager != null)
             {
                 float contentX = pos.X - trackHeaderWidth;
                 float time = Mathf.Max(0f, contentX / pixelsPerSecond + scrollOffset);
                 if (snapToGrid) time = SnapTimeToGrid(time);
-                if (loopDragHandle == LoopDragHandle.Start)
+
+                // When dragging from a Ctrl+click anchor, always keep start < end
+                if (loopDragHandle == LoopDragHandle.End && loopDragAnchorTime >= 0f)
+                {
+                    syncManager.LoopStartTime = Mathf.Min(loopDragAnchorTime, time);
+                    syncManager.LoopEndTime = Mathf.Max(loopDragAnchorTime, time);
+                }
+                else if (loopDragHandle == LoopDragHandle.Start)
                     syncManager.LoopStartTime = time;
                 else if (loopDragHandle == LoopDragHandle.End)
                     syncManager.LoopEndTime = time;
+
                 AcceptEvent();
                 return;
             }
@@ -360,7 +558,22 @@ namespace LazerSystem.UI
                 newTime = Mathf.Max(0f, newTime);
                 if (snapToGrid)
                     newTime = SnapTimeToGrid(newTime);
-                draggingBlock.StartTime = newTime;
+
+                // Multi-select drag: move all selected blocks by the same delta
+                if (selectedBlocks.Count > 1 && selectedBlocks.Contains(draggingBlock))
+                {
+                    float delta = newTime - draggingBlock.StartTime;
+                    foreach (var blk in selectedBlocks)
+                    {
+                        float proposed = blk.StartTime + delta;
+                        blk.StartTime = Mathf.Max(0f, proposed);
+                    }
+                }
+                else
+                {
+                    newTime = ClampMoveToAvoidOverlap(draggingBlock, draggingBlock.TrackIndex, newTime);
+                    draggingBlock.StartTime = newTime;
+                }
                 AcceptEvent();
                 return;
             }
@@ -374,10 +587,18 @@ namespace LazerSystem.UI
                 return;
             }
 
+            if (isRubberBanding)
+            {
+                rubberBandEnd = pos;
+                UpdateRubberBandSelection();
+                AcceptEvent();
+                return;
+            }
+
             UpdateCursorForPosition(pos);
         }
 
-        private void HandleLeftClick(Vector2 localPos, bool ctrlPressed)
+        private void HandleLeftClick(Vector2 localPos, bool ctrlPressed, bool shiftPressed)
         {
             if (playbackManager == null)
                 return;
@@ -385,7 +606,7 @@ namespace LazerSystem.UI
             // Check ruler area
             if (localPos.Y < RulerHeight)
             {
-                HandleRulerClick(localPos);
+                HandleRulerClick(localPos, ctrlPressed);
                 return;
             }
 
@@ -398,6 +619,96 @@ namespace LazerSystem.UI
 
             var tracks = playbackManager.Tracks;
             float contentX = localPos.X - trackHeaderWidth;
+
+            // Automation mode: handle keyframe clicks within the selected block
+            if (automationEditMode && selectedBlock != null)
+            {
+                int blockTrack = selectedBlock.TrackIndex;
+                if (blockTrack >= 0 && blockTrack < tracks.Count)
+                {
+                    float trackY = blockTrack * trackHeight + RulerHeight;
+                    if (localPos.Y >= trackY && localPos.Y <= trackY + trackHeight)
+                    {
+                        float blockXPos = (selectedBlock.StartTime - scrollOffset) * pixelsPerSecond;
+                        float blockWidth = selectedBlock.Duration * pixelsPerSecond;
+
+                        if (contentX >= blockXPos && contentX <= blockXPos + blockWidth)
+                        {
+                            float normalizedTime = (contentX - blockXPos) / blockWidth;
+                            normalizedTime = Mathf.Clamp(normalizedTime, 0f, 1f);
+
+                            // Color composite mode: open color picker popup
+                            if (activeAutomationParam == "Color")
+                            {
+                                colorAutoNormalizedTime = normalizedTime;
+
+                                // Pre-fill picker with current color at this time
+                                if (selectedBlock.Automation != null)
+                                {
+                                    var rLane = selectedBlock.Automation.GetLane("ColorR");
+                                    var gLane = selectedBlock.Automation.GetLane("ColorG");
+                                    var bLane = selectedBlock.Automation.GetLane("ColorB");
+                                    float r = rLane != null ? rLane.Evaluate(normalizedTime) : (selectedBlock.Cue?.Color.R ?? 1f);
+                                    float g = gLane != null ? gLane.Evaluate(normalizedTime) : (selectedBlock.Cue?.Color.G ?? 1f);
+                                    float b = bLane != null ? bLane.Evaluate(normalizedTime) : (selectedBlock.Cue?.Color.B ?? 1f);
+                                    colorAutoPicker.Color = new Color(r, g, b);
+                                }
+                                else
+                                {
+                                    colorAutoPicker.Color = selectedBlock.Cue?.Color ?? Colors.White;
+                                }
+
+                                var globalPos = GetGlobalTransformWithCanvas() * localPos;
+                                colorAutoPopup.Position = new Vector2I((int)globalPos.X, (int)globalPos.Y);
+                                colorAutoPopup.Popup();
+                                return;
+                            }
+
+                            var paramDef = AutomatableParameter.Find(activeAutomationParam);
+                            if (paramDef != null)
+                            {
+                                // Ensure automation data exists
+                                if (selectedBlock.Automation == null)
+                                    selectedBlock.Automation = new AutomationData();
+
+                                var lane = selectedBlock.Automation.GetOrCreateLane(
+                                    activeAutomationParam, paramDef.Value.Default, paramDef.Value.Min, paramDef.Value.Max);
+
+                                // Check if clicking near an existing keyframe
+                                float timeTolerance = 6f / blockWidth; // 6px tolerance
+                                int nearIdx = lane.FindKeyframeNear(normalizedTime, timeTolerance);
+
+                                if (nearIdx >= 0)
+                                {
+                                    // Select and start dragging the keyframe
+                                    selectedKeyframeIndex = nearIdx;
+                                    selectedKeyframeLane = lane;
+                                    isDraggingKeyframe = true;
+                                    dragKfOriginalTime = lane.Keyframes[nearIdx].Time;
+                                    dragKfOriginalValue = lane.Keyframes[nearIdx].Value;
+                                }
+                                else
+                                {
+                                    // Create a new keyframe at click position
+                                    float blockY = trackY + 2;
+                                    float blockH = trackHeight - 4;
+                                    float yInBlock = localPos.Y - blockY;
+                                    float valueFraction = 1f - Mathf.Clamp(yInBlock / blockH, 0f, 1f);
+                                    float value = paramDef.Value.Min + valueFraction * (paramDef.Value.Max - paramDef.Value.Min);
+
+                                    var kf = new AutomationKeyframe(normalizedTime, value);
+                                    var cmd = new AddKeyframeCommand(lane, kf);
+                                    UndoManager.Instance.ExecuteCommand(cmd);
+
+                                    selectedKeyframeIndex = lane.FindKeyframeNear(normalizedTime, 0.0001f);
+                                    selectedKeyframeLane = lane;
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
 
             // Check for edge resize first (skip locked blocks)
             for (int trackIdx = 0; trackIdx < tracks.Count; trackIdx++)
@@ -427,7 +738,7 @@ namespace LazerSystem.UI
                 }
             }
 
-            // Check for block body click (select + drag / ctrl+drag duplicate)
+            // Check for block body click (select + drag / ctrl+drag duplicate / shift+click multi)
             for (int trackIdx = 0; trackIdx < tracks.Count; trackIdx++)
             {
                 float trackY = trackIdx * trackHeight + RulerHeight;
@@ -460,6 +771,32 @@ namespace LazerSystem.UI
                             return;
                         }
 
+                        // Shift+click = toggle multi-select
+                        if (shiftPressed)
+                        {
+                            ToggleBlockSelection(block);
+                            return;
+                        }
+
+                        // If clicking on an already-selected block in a multi-selection, start multi-drag
+                        if (selectedBlocks.Contains(block) && selectedBlocks.Count > 1)
+                        {
+                            selectedBlock = block;
+                            if (!block.Locked)
+                            {
+                                isDragging = true;
+                                draggingBlock = block;
+                                dragStartTime = block.StartTime;
+                                dragOffsetX = contentX - xPos;
+                                // Store original positions for all selected blocks
+                                multiDragOriginalStarts.Clear();
+                                foreach (var blk in selectedBlocks)
+                                    multiDragOriginalStarts[blk] = blk.StartTime;
+                            }
+                            return;
+                        }
+
+                        // Normal click = single select + drag
                         SelectBlock(block);
                         if (!block.Locked)
                         {
@@ -467,6 +804,8 @@ namespace LazerSystem.UI
                             draggingBlock = block;
                             dragStartTime = block.StartTime;
                             dragOffsetX = contentX - xPos;
+                            multiDragOriginalStarts.Clear();
+                            multiDragOriginalStarts[block] = block.StartTime;
                         }
                         return;
                     }
@@ -488,17 +827,45 @@ namespace LazerSystem.UI
                 }
             }
 
+            // Start rubber-band selection on empty space
+            if (!drawModeEnabled && localPos.X > trackHeaderWidth)
+            {
+                isRubberBanding = true;
+                rubberBandStart = localPos;
+                rubberBandEnd = localPos;
+                if (!shiftPressed)
+                {
+                    SelectBlock(null);
+                }
+                return;
+            }
+
             // Clicked empty space
             SelectBlock(null);
         }
 
-        private void HandleRulerClick(Vector2 localPos)
+        private void HandleRulerClick(Vector2 localPos, bool ctrlPressed)
         {
             if (syncManager == null) return;
             float contentX = localPos.X - trackHeaderWidth;
             if (contentX < 0) return;
 
-            // Check for loop handle dragging
+            float time = contentX / pixelsPerSecond + scrollOffset;
+            if (snapToGrid) time = SnapTimeToGrid(time);
+            time = Mathf.Max(0f, time);
+
+            // Ctrl+click: start defining a loop region by dragging
+            if (ctrlPressed)
+            {
+                loopDragAnchorTime = time;
+                syncManager.LoopStartTime = time;
+                syncManager.LoopEndTime = time;
+                isDraggingLoop = true;
+                loopDragHandle = LoopDragHandle.End;
+                return;
+            }
+
+            // Check for loop handle dragging on existing region
             if (syncManager.HasLoopRegion)
             {
                 float loopStartX = (syncManager.LoopStartTime - scrollOffset) * pixelsPerSecond;
@@ -508,19 +875,20 @@ namespace LazerSystem.UI
                 {
                     isDraggingLoop = true;
                     loopDragHandle = LoopDragHandle.Start;
+                    loopDragAnchorTime = -1f;
                     return;
                 }
                 if (Mathf.Abs(contentX - loopEndX) <= EdgeThresholdPx)
                 {
                     isDraggingLoop = true;
                     loopDragHandle = LoopDragHandle.End;
+                    loopDragAnchorTime = -1f;
                     return;
                 }
             }
 
-            // Click ruler to seek
-            float time = contentX / pixelsPerSecond + scrollOffset;
-            syncManager.Seek(Mathf.Max(0f, time));
+            // Normal click: seek
+            syncManager.Seek(time);
         }
 
         private void HandleRightClick(Vector2 localPos, Vector2 globalPos)
@@ -549,6 +917,40 @@ namespace LazerSystem.UI
                 if (trackIdx >= 0)
                     ShowTrackHeaderContextMenu(trackIdx, globalPos);
                 return;
+            }
+
+            // Automation mode: right-click keyframe for curve type menu
+            if (automationEditMode && selectedBlock != null)
+            {
+                float contentXA = localPos.X - trackHeaderWidth;
+                int blockTrack = selectedBlock.TrackIndex;
+                if (blockTrack >= 0 && blockTrack < playbackManager.Tracks.Count)
+                {
+                    float trackYA = blockTrack * trackHeight + RulerHeight;
+                    if (localPos.Y >= trackYA && localPos.Y <= trackYA + trackHeight)
+                    {
+                        float blockXPos = (selectedBlock.StartTime - scrollOffset) * pixelsPerSecond;
+                        float blockWidth = selectedBlock.Duration * pixelsPerSecond;
+                        if (contentXA >= blockXPos && contentXA <= blockXPos + blockWidth)
+                        {
+                            float normTime = Mathf.Clamp((contentXA - blockXPos) / blockWidth, 0f, 1f);
+                            var lane = selectedBlock.Automation?.GetLane(activeAutomationParam);
+                            if (lane != null)
+                            {
+                                float timeTol = 6f / blockWidth;
+                                int nearIdx = lane.FindKeyframeNear(normTime, timeTol);
+                                if (nearIdx >= 0)
+                                {
+                                    contextKeyframe = lane.Keyframes[nearIdx];
+                                    contextKeyframeLane = lane;
+                                    contextKeyframeIndex = nearIdx;
+                                    ShowKeyframeContextMenu(globalPos);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             float contentXR = localPos.X - trackHeaderWidth;
@@ -743,24 +1145,50 @@ namespace LazerSystem.UI
         private void PasteAtPlayhead()
         {
             if (playbackManager == null || syncManager == null) return;
-
-            var clone = ClipboardManager.PasteClone();
-            if (clone == null) return;
+            var tracks = playbackManager.Tracks;
+            if (tracks.Count == 0) return;
 
             float pasteTime = syncManager.CurrentTime;
             if (snapToGrid) pasteTime = SnapTimeToGrid(pasteTime);
-            clone.StartTime = pasteTime;
 
-            // Find track for paste
-            int trackIdx = selectedBlock?.TrackIndex ?? 0;
-            var tracks = playbackManager.Tracks;
-            if (trackIdx < 0 || trackIdx >= tracks.Count) trackIdx = 0;
-            if (tracks.Count == 0) return;
+            var clones = ClipboardManager.PasteMultipleClones();
+            if (clones.Count == 0) return;
 
-            clone.TrackIndex = trackIdx;
-            var cmd = new AddBlockCommand(clone, tracks[trackIdx], playbackManager.LaserShow);
-            UndoManager.Instance.ExecuteCommand(cmd);
-            SelectBlock(clone);
+            // Find the earliest start time in the copied blocks to calculate relative offsets
+            float earliestStart = float.MaxValue;
+            foreach (var c in clones)
+                if (c.StartTime < earliestStart) earliestStart = c.StartTime;
+
+            var commands = new List<ITimelineCommand>();
+            foreach (var clone in clones)
+            {
+                float offset = clone.StartTime - earliestStart;
+                clone.StartTime = pasteTime + offset;
+
+                int trackIdx = clone.TrackIndex;
+                if (trackIdx < 0 || trackIdx >= tracks.Count) trackIdx = 0;
+                clone.TrackIndex = trackIdx;
+
+                commands.Add(new AddBlockCommand(clone, tracks[trackIdx], playbackManager.LaserShow));
+            }
+
+            if (commands.Count == 1)
+            {
+                UndoManager.Instance.ExecuteCommand(commands[0]);
+            }
+            else
+            {
+                var compound = new CompoundCommand("Paste Blocks", commands);
+                UndoManager.Instance.ExecuteCommand(compound);
+            }
+
+            // Select the pasted blocks
+            selectedBlocks.Clear();
+            foreach (var clone in clones)
+                selectedBlocks.Add(clone);
+            selectedBlock = clones[0];
+            OnBlockSelected?.Invoke(selectedBlock);
+            QueueRedraw();
         }
 
         // --- Draw Mode Finish ---
@@ -837,7 +1265,19 @@ namespace LazerSystem.UI
             resizeEdge = edge;
             resizeOriginalStart = block.StartTime;
             resizeOriginalDuration = block.Duration;
-            SelectBlock(block);
+
+            // Store originals for all selected blocks (for multi-resize)
+            multiResizeOriginals.Clear();
+            if (selectedBlocks.Contains(block) && selectedBlocks.Count > 1)
+            {
+                foreach (var blk in selectedBlocks)
+                    multiResizeOriginals[blk] = (blk.StartTime, blk.Duration);
+            }
+            else
+            {
+                // Single block resize: make sure it's selected
+                SelectBlock(block);
+            }
         }
 
         private void HandleResizeDrag(Vector2 pos)
@@ -852,15 +1292,50 @@ namespace LazerSystem.UI
             if (resizeEdge == ResizeEdge.Right)
             {
                 float newDuration = time - resizingBlock.StartTime;
-                resizingBlock.Duration = Mathf.Max(minDuration, newDuration);
+                newDuration = Mathf.Max(minDuration, newDuration);
+                newDuration = ClampResizeRightToAvoidOverlap(resizingBlock, resizingBlock.TrackIndex, newDuration);
+                newDuration = Mathf.Max(minDuration, newDuration);
+
+                // Multi-select: apply proportional resize to all selected blocks
+                if (multiResizeOriginals.Count > 1 && resizeOriginalDuration > 0f)
+                {
+                    float ratio = newDuration / resizeOriginalDuration;
+                    foreach (var kvp in multiResizeOriginals)
+                    {
+                        float scaledDur = Mathf.Max(minDuration, kvp.Value.duration * ratio);
+                        kvp.Key.Duration = scaledDur;
+                    }
+                }
+                else
+                {
+                    resizingBlock.Duration = newDuration;
+                }
             }
             else if (resizeEdge == ResizeEdge.Left)
             {
                 float originalEnd = resizingBlock.StartTime + resizingBlock.Duration;
                 float newStart = Mathf.Min(time, originalEnd - minDuration);
                 newStart = Mathf.Max(0f, newStart);
-                resizingBlock.Duration = originalEnd - newStart;
-                resizingBlock.StartTime = newStart;
+                newStart = ClampResizeLeftToAvoidOverlap(resizingBlock, resizingBlock.TrackIndex, newStart, originalEnd);
+                float newDuration = originalEnd - newStart;
+
+                // Multi-select: apply proportional resize to all selected blocks
+                if (multiResizeOriginals.Count > 1 && resizeOriginalDuration > 0f)
+                {
+                    float ratio = newDuration / resizeOriginalDuration;
+                    foreach (var kvp in multiResizeOriginals)
+                    {
+                        float origEnd = kvp.Value.start + kvp.Value.duration;
+                        float scaledDur = Mathf.Max(minDuration, kvp.Value.duration * ratio);
+                        kvp.Key.Duration = scaledDur;
+                        kvp.Key.StartTime = origEnd - scaledDur;
+                    }
+                }
+                else
+                {
+                    resizingBlock.Duration = newDuration;
+                    resizingBlock.StartTime = newStart;
+                }
             }
         }
 
@@ -869,6 +1344,92 @@ namespace LazerSystem.UI
             if (playbackManager == null || playbackManager.BPM <= 0f)
                 return 0.1f;
             return 60f / playbackManager.BPM * snapBeatDivision;
+        }
+
+        // --- Overlap Prevention ---
+
+        private TimelineTrack FindTrackContaining(LaserCueBlock block)
+        {
+            if (playbackManager == null) return null;
+            foreach (var track in playbackManager.Tracks)
+            {
+                if (track.blocks != null && track.blocks.Contains(block))
+                    return track;
+            }
+            return null;
+        }
+
+        private float ClampMoveToAvoidOverlap(LaserCueBlock block, int trackIndex, float desiredStart)
+        {
+            var track = FindTrackContaining(block);
+            if (track == null) return desiredStart;
+
+            float duration = block.Duration;
+            float desiredEnd = desiredStart + duration;
+
+            foreach (var other in track.blocks)
+            {
+                if (other == block || other == null) continue;
+                if (selectedBlocks.Contains(other)) continue;
+                float otherEnd = other.StartTime + other.Duration;
+
+                if (desiredStart < otherEnd && desiredEnd > other.StartTime)
+                {
+                    float snapLeft = other.StartTime - duration;
+                    float snapRight = otherEnd;
+
+                    float distLeft = Mathf.Abs(desiredStart - snapLeft);
+                    float distRight = Mathf.Abs(desiredStart - snapRight);
+
+                    desiredStart = distLeft <= distRight ? snapLeft : snapRight;
+                }
+            }
+
+            return Mathf.Max(0f, desiredStart);
+        }
+
+        private float ClampResizeRightToAvoidOverlap(LaserCueBlock block, int trackIndex, float desiredDuration)
+        {
+            var track = FindTrackContaining(block);
+            if (track == null) return desiredDuration;
+
+            float blockStart = block.StartTime;
+            float maxEnd = blockStart + desiredDuration;
+
+            foreach (var other in track.blocks)
+            {
+                if (other == block || other == null) continue;
+                if (selectedBlocks.Contains(other)) continue;
+
+                // Any block whose start falls within our new extent is a collision
+                if (other.StartTime >= blockStart && other.StartTime < maxEnd)
+                {
+                    maxEnd = Mathf.Min(maxEnd, other.StartTime);
+                }
+            }
+
+            return maxEnd - blockStart;
+        }
+
+        private float ClampResizeLeftToAvoidOverlap(LaserCueBlock block, int trackIndex, float desiredStart, float fixedEnd)
+        {
+            var track = FindTrackContaining(block);
+            if (track == null) return desiredStart;
+
+            foreach (var other in track.blocks)
+            {
+                if (other == block || other == null) continue;
+                if (selectedBlocks.Contains(other)) continue;
+                float otherEnd = other.StartTime + other.Duration;
+
+                // Other block ends within our new range — push our start past it
+                if (otherEnd > desiredStart && other.StartTime < fixedEnd)
+                {
+                    desiredStart = Mathf.Max(desiredStart, otherEnd);
+                }
+            }
+
+            return desiredStart;
         }
 
         // --- Block Delete ---
@@ -901,15 +1462,54 @@ namespace LazerSystem.UI
             SelectBlock(null);
         }
 
+        private void DeleteSelectedBlocks()
+        {
+            if (playbackManager == null || selectedBlocks.Count == 0)
+                return;
+
+            var tracks = playbackManager.Tracks;
+            var commands = new List<ITimelineCommand>();
+
+            foreach (var block in selectedBlocks)
+            {
+                if (block.Locked) continue;
+                TimelineTrack owningTrack = null;
+                foreach (var track in tracks)
+                {
+                    if (track.blocks != null && track.blocks.Contains(block))
+                    {
+                        owningTrack = track;
+                        break;
+                    }
+                }
+                if (owningTrack != null)
+                    commands.Add(new RemoveBlockCommand(block, owningTrack, playbackManager.LaserShow));
+            }
+
+            if (commands.Count > 0)
+            {
+                var compound = new CompoundCommand("Delete Blocks", commands);
+                UndoManager.Instance.ExecuteCommand(compound);
+            }
+
+            SelectBlock(null);
+        }
+
         // --- Block Selection ---
 
         private void SelectBlock(LaserCueBlock block)
         {
             selectedBlock = block;
+            selectedBlocks.Clear();
+            if (block != null)
+                selectedBlocks.Add(block);
+
             OnBlockSelected?.Invoke(block);
 
             if (inspectorPanel != null)
             {
+                inspectorPanel.timelineUI = this;
+                inspectorPanel.playbackManager = playbackManager;
                 if (block != null)
                     inspectorPanel.ShowBlock(block);
                 else
@@ -917,6 +1517,101 @@ namespace LazerSystem.UI
             }
 
             QueueRedraw();
+        }
+
+        private void ToggleBlockSelection(LaserCueBlock block)
+        {
+            if (block == null) return;
+
+            if (selectedBlocks.Contains(block))
+            {
+                selectedBlocks.Remove(block);
+                if (selectedBlock == block)
+                    selectedBlock = selectedBlocks.Count > 0 ? System.Linq.Enumerable.First(selectedBlocks) : null;
+            }
+            else
+            {
+                selectedBlocks.Add(block);
+                selectedBlock = block;
+            }
+
+            OnBlockSelected?.Invoke(selectedBlock);
+
+            if (inspectorPanel != null)
+            {
+                inspectorPanel.timelineUI = this;
+                inspectorPanel.playbackManager = playbackManager;
+                if (selectedBlock != null)
+                    inspectorPanel.ShowBlock(selectedBlock);
+                else
+                    inspectorPanel.HidePanel();
+            }
+
+            QueueRedraw();
+        }
+
+        private bool IsBlockSelected(LaserCueBlock block)
+        {
+            return selectedBlocks.Contains(block);
+        }
+
+        private void UpdateRubberBandSelection()
+        {
+            if (playbackManager == null) return;
+            var tracks = playbackManager.Tracks;
+
+            // Convert rubber band rect to time/track space
+            float x1 = Mathf.Min(rubberBandStart.X, rubberBandEnd.X);
+            float x2 = Mathf.Max(rubberBandStart.X, rubberBandEnd.X);
+            float y1 = Mathf.Min(rubberBandStart.Y, rubberBandEnd.Y);
+            float y2 = Mathf.Max(rubberBandStart.Y, rubberBandEnd.Y);
+
+            float contentX1 = x1 - trackHeaderWidth;
+            float contentX2 = x2 - trackHeaderWidth;
+            float timeStart = contentX1 / pixelsPerSecond + scrollOffset;
+            float timeEnd = contentX2 / pixelsPerSecond + scrollOffset;
+
+            selectedBlocks.Clear();
+            selectedBlock = null;
+
+            for (int trackIdx = 0; trackIdx < tracks.Count; trackIdx++)
+            {
+                float trackY = trackIdx * trackHeight + RulerHeight;
+                float trackBottom = trackY + trackHeight;
+
+                // Check if rubber band overlaps this track row
+                if (y2 < trackY || y1 > trackBottom)
+                    continue;
+
+                if (tracks[trackIdx].blocks == null)
+                    continue;
+
+                foreach (var block in tracks[trackIdx].blocks)
+                {
+                    if (block == null) continue;
+                    float blockEnd = block.StartTime + block.Duration;
+
+                    // Check time overlap
+                    if (block.StartTime < timeEnd && blockEnd > timeStart)
+                    {
+                        selectedBlocks.Add(block);
+                        if (selectedBlock == null)
+                            selectedBlock = block;
+                    }
+                }
+            }
+
+            // Update inspector with first selected block
+            OnBlockSelected?.Invoke(selectedBlock);
+            if (inspectorPanel != null)
+            {
+                inspectorPanel.timelineUI = this;
+                inspectorPanel.playbackManager = playbackManager;
+                if (selectedBlock != null)
+                    inspectorPanel.ShowBlock(selectedBlock);
+                else
+                    inspectorPanel.HidePanel();
+            }
         }
 
         // --- Track Header Interaction ---
@@ -1204,53 +1899,77 @@ namespace LazerSystem.UI
                     if (block == null || block.Cue == null)
                         continue;
 
-                    float xPos = contentLeft + (block.StartTime - scrollOffset) * pixelsPerSecond;
-                    float width = block.Duration * pixelsPerSecond;
+                    float rawXPos = contentLeft + (block.StartTime - scrollOffset) * pixelsPerSecond;
+                    float rawWidth = block.Duration * pixelsPerSecond;
                     float y = trackIdx * trackHeight + RulerHeight + 2;
                     float height = trackHeight - 4;
 
-                    if (xPos + width < contentLeft || xPos > viewWidth)
+                    if (rawXPos + rawWidth < contentLeft || rawXPos > viewWidth)
                         continue;
+
+                    // Clip block to content area so it doesn't draw over track headers
+                    float xPos = Mathf.Max(rawXPos, contentLeft);
+                    float xEnd = Mathf.Min(rawXPos + rawWidth, viewWidth);
+                    float width = xEnd - xPos;
+                    if (width <= 0) continue;
 
                     // Block fill
                     Color blockColor = block.Cue.Color;
-                    float alpha = (block == selectedBlock) ? 1f : 0.7f;
+                    float alpha = IsBlockSelected(block) ? 1f : 0.7f;
                     if (block.Muted) alpha = 0.25f;
                     blockColor.A = alpha;
                     DrawRect(new Rect2(xPos, y, width, height), blockColor);
 
-                    // Fade regions
+                    // Fade regions (clipped)
                     if (block.FadeInDuration > 0f)
                     {
                         float fadeW = block.FadeInDuration * pixelsPerSecond;
-                        DrawRect(new Rect2(xPos, y, Mathf.Min(fadeW, width), height),
-                            new Color(0f, 0f, 0f, 0.25f));
+                        float fadeX1 = Mathf.Max(rawXPos, contentLeft);
+                        float fadeX2 = Mathf.Min(rawXPos + Mathf.Min(fadeW, rawWidth), viewWidth);
+                        if (fadeX2 > fadeX1)
+                            DrawRect(new Rect2(fadeX1, y, fadeX2 - fadeX1, height),
+                                new Color(0f, 0f, 0f, 0.25f));
                     }
                     if (block.FadeOutDuration > 0f)
                     {
                         float fadeW = block.FadeOutDuration * pixelsPerSecond;
-                        float fadeX = xPos + width - Mathf.Min(fadeW, width);
-                        DrawRect(new Rect2(fadeX, y, Mathf.Min(fadeW, width), height),
-                            new Color(0f, 0f, 0f, 0.25f));
+                        float fadeStart = rawXPos + rawWidth - Mathf.Min(fadeW, rawWidth);
+                        float fadeX1 = Mathf.Max(fadeStart, contentLeft);
+                        float fadeX2 = Mathf.Min(rawXPos + rawWidth, viewWidth);
+                        if (fadeX2 > fadeX1)
+                            DrawRect(new Rect2(fadeX1, y, fadeX2 - fadeX1, height),
+                                new Color(0f, 0f, 0f, 0.25f));
                     }
 
                     // Border
-                    Color borderColor = (block == selectedBlock)
+                    Color borderColor = IsBlockSelected(block)
                         ? Colors.White
                         : new Color(1f, 1f, 1f, 0.3f);
-                    float borderWidth = (block == selectedBlock) ? 2f : 1f;
-                    DrawRect(new Rect2(xPos, y, width, height), borderColor, false, borderWidth);
+                    float bw = IsBlockSelected(block) ? 2f : 1f;
+                    DrawRect(new Rect2(xPos, y, width, height), borderColor, false, bw);
 
-                    // Block label
+                    // Block label (only if left edge is visible enough)
                     if (_font != null && width > 20)
                     {
                         string label = block.Cue.CueName;
                         if (block.Locked) label = "L " + label;
-                        DrawString(_font, new Vector2(xPos + 4, y + height / 2 + 4),
-                            label, HorizontalAlignment.Left, (int)width - 8, 11, Colors.White);
+                        float labelX = Mathf.Max(xPos + 4, contentLeft + 4);
+                        float labelMaxW = xEnd - labelX - 4;
+                        if (labelMaxW > 10)
+                            DrawString(_font, new Vector2(labelX, y + height / 2 + 4),
+                                label, HorizontalAlignment.Left, (int)labelMaxW, 11, Colors.White);
+                    }
+
+                    // Automation envelope overlay (use raw coords since it clips internally)
+                    if (automationEditMode && block.Automation != null)
+                    {
+                        DrawAutomationEnvelope(block, rawXPos, y, rawWidth, height);
                     }
                 }
             }
+
+            // Redraw track headers on top to cover any bleeding from blocks/automation
+            DrawTrackHeaders(tracks, viewHeight);
 
             // Draw mode preview
             if (isDrawing)
@@ -1266,6 +1985,24 @@ namespace LazerSystem.UI
                     new Color(1f, 1f, 1f, 0.5f), false, 1f);
             }
 
+            // Rubber-band selection rect
+            if (isRubberBanding)
+            {
+                float rx = Mathf.Min(rubberBandStart.X, rubberBandEnd.X);
+                float ry = Mathf.Min(rubberBandStart.Y, rubberBandEnd.Y);
+                float rw = Mathf.Abs(rubberBandEnd.X - rubberBandStart.X);
+                float rh = Mathf.Abs(rubberBandEnd.Y - rubberBandStart.Y);
+                DrawRect(new Rect2(rx, ry, rw, rh), new Color(0.3f, 0.6f, 1f, 0.15f));
+                DrawRect(new Rect2(rx, ry, rw, rh), new Color(0.3f, 0.6f, 1f, 0.6f), false, 1f);
+            }
+
+            // Multi-selection count indicator
+            if (selectedBlocks.Count > 1 && _font != null)
+            {
+                DrawString(_font, new Vector2(contentLeft + contentWidth - 80, RulerHeight - 4),
+                    $"{selectedBlocks.Count} selected", HorizontalAlignment.Right, -1, 10, new Color(1f, 1f, 1f, 0.6f));
+            }
+
             // Playhead
             if (syncManager != null)
             {
@@ -1278,6 +2015,17 @@ namespace LazerSystem.UI
                     DrawLine(new Vector2(playheadX, 0), new Vector2(playheadX, totalHeight),
                         playheadColor, 2f);
                 }
+            }
+
+            // Automation mode indicator
+            if (automationEditMode && _font != null)
+            {
+                string modeLabel = $"AUTO: {activeAutomationParam}";
+                Color autoColor = AutomationParamColors.ContainsKey(activeAutomationParam)
+                    ? AutomationParamColors[activeAutomationParam]
+                    : Colors.Yellow;
+                DrawString(_font, new Vector2(contentLeft + 4, RulerHeight - 4),
+                    modeLabel, HorizontalAlignment.Left, -1, 10, autoColor);
             }
         }
 
@@ -1459,6 +2207,275 @@ namespace LazerSystem.UI
                 DrawString(_font, new Vector2(x + 2, RulerHeight - 3),
                     marker.Name ?? "", HorizontalAlignment.Left, -1, 9, marker.MarkerColor);
             }
+        }
+
+        // --- Keyframe Context Menu ---
+
+        private void ShowKeyframeContextMenu(Vector2 globalPos)
+        {
+            keyframeContextMenu.Clear();
+            keyframeContextMenu.AddItem("Linear", 0);
+            keyframeContextMenu.AddItem("Ease In", 1);
+            keyframeContextMenu.AddItem("Ease Out", 2);
+            keyframeContextMenu.AddItem("Ease In/Out", 3);
+            keyframeContextMenu.AddItem("Step", 4);
+            keyframeContextMenu.AddSeparator();
+            keyframeContextMenu.AddItem("Delete", 10);
+            keyframeContextMenu.Position = new Vector2I((int)globalPos.X, (int)globalPos.Y);
+            keyframeContextMenu.Popup();
+        }
+
+        private void OnKeyframeContextMenuItemSelected(long id)
+        {
+            if (contextKeyframe == null || contextKeyframeLane == null) return;
+
+            if (id == 10)
+            {
+                var cmd = new RemoveKeyframeCommand(contextKeyframeLane, contextKeyframeIndex);
+                UndoManager.Instance.ExecuteCommand(cmd);
+                selectedKeyframeIndex = -1;
+                selectedKeyframeLane = null;
+            }
+            else
+            {
+                var newType = (AutomationCurveType)(int)id;
+                var oldType = contextKeyframe.CurveType;
+                if (newType != oldType)
+                {
+                    var cmd = new ChangeCurveTypeCommand(contextKeyframe, oldType, newType);
+                    UndoManager.Instance.ExecuteCommand(cmd);
+                }
+            }
+            contextKeyframe = null;
+            contextKeyframeLane = null;
+        }
+
+        // --- Automation Envelope Drawing ---
+
+        private static readonly System.Collections.Generic.Dictionary<string, Color> AutomationParamColors = new()
+        {
+            { "Intensity", Colors.Yellow },
+            { "Size", Colors.Cyan },
+            { "Rotation", Colors.Magenta },
+            { "Speed", Colors.Green },
+            { "Spread", new Color(0.5f, 1f, 0.5f) },
+            { "Frequency", new Color(0.4f, 0.8f, 1f) },
+            { "Amplitude", new Color(1f, 0.6f, 0.2f) },
+            { "PositionX", Colors.Orange },
+            { "PositionY", new Color(1f, 0.5f, 0f) },
+            { "ColorR", Colors.Red },
+            { "ColorG", Colors.Green },
+            { "ColorB", new Color(0.3f, 0.5f, 1f) },
+            { "Color", Colors.White },
+        };
+
+        private void DrawAutomationEnvelope(LaserCueBlock block, float blockX, float blockY, float blockWidth, float blockHeight)
+        {
+            if (block.Automation == null) return;
+
+            // Composite Color mode: draw R, G, B lanes overlaid
+            if (activeAutomationParam == "Color")
+            {
+                DrawSingleLaneEnvelope(block.Automation.GetLane("ColorR"), block, blockX, blockY, blockWidth, blockHeight, Colors.Red);
+                DrawSingleLaneEnvelope(block.Automation.GetLane("ColorG"), block, blockX, blockY, blockWidth, blockHeight, Colors.Green);
+                DrawSingleLaneEnvelope(block.Automation.GetLane("ColorB"), block, blockX, blockY, blockWidth, blockHeight, new Color(0.3f, 0.5f, 1f));
+                return;
+            }
+
+            var lane = block.Automation.GetLane(activeAutomationParam);
+            if (lane == null || lane.Keyframes == null || lane.Keyframes.Count == 0) return;
+
+            Color lineColor = AutomationParamColors.ContainsKey(activeAutomationParam)
+                ? AutomationParamColors[activeAutomationParam]
+                : Colors.White;
+
+            float range = lane.MaxValue - lane.MinValue;
+            if (range <= 0f) range = 1f;
+
+            // Draw filled area + polyline by sampling at ~2px intervals
+            int steps = Mathf.Max(2, (int)(blockWidth / 2f));
+            var polylinePoints = new Vector2[steps + 1];
+
+            for (int i = 0; i <= steps; i++)
+            {
+                float t = (float)i / steps;
+                float value = lane.Evaluate(t);
+                float valueFraction = (value - lane.MinValue) / range;
+                float px = blockX + t * blockWidth;
+                float py = blockY + blockHeight * (1f - valueFraction);
+                polylinePoints[i] = new Vector2(px, py);
+            }
+
+            // Semi-transparent fill (draw as triangles from bottom)
+            Color fillColor = lineColor;
+            fillColor.A = 0.15f;
+            float bottomY = blockY + blockHeight;
+            for (int i = 0; i < steps; i++)
+            {
+                var p1 = polylinePoints[i];
+                var p2 = polylinePoints[i + 1];
+                var p3 = new Vector2(p2.X, bottomY);
+                var p4 = new Vector2(p1.X, bottomY);
+                DrawPolygon(new Vector2[] { p1, p2, p3, p4 }, new Color[] { fillColor, fillColor, fillColor, fillColor });
+            }
+
+            // Polyline
+            lineColor.A = 0.9f;
+            for (int i = 0; i < steps; i++)
+            {
+                bool isStep = false;
+                // Check if this segment is a step curve
+                if (lane.Keyframes.Count > 1)
+                {
+                    float segT = (float)i / steps;
+                    for (int k = 0; k < lane.Keyframes.Count - 1; k++)
+                    {
+                        if (segT >= lane.Keyframes[k].Time && segT < lane.Keyframes[k + 1].Time
+                            && lane.Keyframes[k].CurveType == AutomationCurveType.Step)
+                        {
+                            isStep = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (isStep)
+                {
+                    // Dashed line for step segments
+                    float dx = polylinePoints[i + 1].X - polylinePoints[i].X;
+                    if (((int)(polylinePoints[i].X) / 4) % 2 == 0)
+                        DrawLine(polylinePoints[i], polylinePoints[i + 1], lineColor, 1.5f);
+                }
+                else
+                {
+                    DrawLine(polylinePoints[i], polylinePoints[i + 1], lineColor, 1.5f);
+                }
+            }
+
+            // Draw keyframe dots
+            bool isSelected = (block == selectedBlock);
+            for (int i = 0; i < lane.Keyframes.Count; i++)
+            {
+                var kf = lane.Keyframes[i];
+                float valueFrac = (kf.Value - lane.MinValue) / range;
+                float kfX = blockX + kf.Time * blockWidth;
+                float kfY = blockY + blockHeight * (1f - valueFrac);
+
+                Color dotColor = (isSelected && selectedKeyframeLane == lane && selectedKeyframeIndex == i)
+                    ? Colors.White
+                    : lineColor;
+                float radius = (isSelected && selectedKeyframeLane == lane && selectedKeyframeIndex == i) ? 4f : 3f;
+                DrawCircle(new Vector2(kfX, kfY), radius, dotColor);
+            }
+        }
+
+        private void OnColorAutoConfirmed()
+        {
+            if (selectedBlock == null) return;
+            colorAutoPopup.Hide();
+
+            var color = colorAutoPicker.Color;
+            float t = colorAutoNormalizedTime;
+
+            if (selectedBlock.Automation == null)
+                selectedBlock.Automation = new AutomationData();
+
+            InsertOrUpdateColorKeyframe(selectedBlock.Automation, "ColorR", t, color.R);
+            InsertOrUpdateColorKeyframe(selectedBlock.Automation, "ColorG", t, color.G);
+            InsertOrUpdateColorKeyframe(selectedBlock.Automation, "ColorB", t, color.B);
+        }
+
+        private void InsertOrUpdateColorKeyframe(AutomationData data, string paramName, float time, float value)
+        {
+            var paramDef = AutomatableParameter.Find(paramName);
+            if (paramDef == null) return;
+
+            var lane = data.GetOrCreateLane(paramName, paramDef.Value.Default, paramDef.Value.Min, paramDef.Value.Max);
+
+            int existing = lane.FindKeyframeNear(time, 0.01f);
+            if (existing >= 0)
+            {
+                float oldVal = lane.Keyframes[existing].Value;
+                var cmd = new MoveKeyframeCommand(lane, existing,
+                    lane.Keyframes[existing].Time, oldVal, time, value);
+                UndoManager.Instance.ExecuteCommand(cmd);
+            }
+            else
+            {
+                var kf = new AutomationKeyframe(time, value);
+                var cmd = new AddKeyframeCommand(lane, kf);
+                UndoManager.Instance.ExecuteCommand(cmd);
+            }
+        }
+
+        private void DrawSingleLaneEnvelope(AutomationLane lane, LaserCueBlock block, float blockX, float blockY, float blockWidth, float blockHeight, Color lineColor)
+        {
+            if (lane == null || lane.Keyframes == null || lane.Keyframes.Count == 0) return;
+
+            float range = lane.MaxValue - lane.MinValue;
+            if (range <= 0f) range = 1f;
+
+            int steps = Mathf.Max(2, (int)(blockWidth / 2f));
+            var polylinePoints = new Vector2[steps + 1];
+
+            for (int i = 0; i <= steps; i++)
+            {
+                float t = (float)i / steps;
+                float value = lane.Evaluate(t);
+                float valueFraction = (value - lane.MinValue) / range;
+                float px = blockX + t * blockWidth;
+                float py = blockY + blockHeight * (1f - valueFraction);
+                polylinePoints[i] = new Vector2(px, py);
+            }
+
+            // Semi-transparent fill
+            Color fillColor = lineColor;
+            fillColor.A = 0.08f;
+            float bottomY = blockY + blockHeight;
+            for (int i = 0; i < steps; i++)
+            {
+                var p1 = polylinePoints[i];
+                var p2 = polylinePoints[i + 1];
+                var p3 = new Vector2(p2.X, bottomY);
+                var p4 = new Vector2(p1.X, bottomY);
+                DrawPolygon(new Vector2[] { p1, p2, p3, p4 }, new Color[] { fillColor, fillColor, fillColor, fillColor });
+            }
+
+            // Polyline
+            Color drawColor = lineColor;
+            drawColor.A = 0.9f;
+            for (int i = 0; i < steps; i++)
+                DrawLine(polylinePoints[i], polylinePoints[i + 1], drawColor, 1.5f);
+
+            // Keyframe dots
+            bool isSelected = (block == selectedBlock);
+            for (int i = 0; i < lane.Keyframes.Count; i++)
+            {
+                var kf = lane.Keyframes[i];
+                float valueFrac = (kf.Value - lane.MinValue) / range;
+                float kfX = blockX + kf.Time * blockWidth;
+                float kfY = blockY + blockHeight * (1f - valueFrac);
+
+                Color dotColor = (isSelected && selectedKeyframeLane == lane && selectedKeyframeIndex == i)
+                    ? Colors.White : lineColor;
+                float radius = (isSelected && selectedKeyframeLane == lane && selectedKeyframeIndex == i) ? 4f : 3f;
+                DrawCircle(new Vector2(kfX, kfY), radius, dotColor);
+            }
+        }
+
+        // --- Automation Public API ---
+
+        public bool IsAutomationEditMode => automationEditMode;
+
+        public string ActiveAutomationParam
+        {
+            get => activeAutomationParam;
+            set => activeAutomationParam = value;
+        }
+
+        public void SetActiveAutomationParam(string param)
+        {
+            activeAutomationParam = param;
         }
 
         // --- Public API ---

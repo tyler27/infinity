@@ -172,6 +172,14 @@ namespace LazerSystem.Timeline
 
                     // Generate pattern points
                     var parameters = PatternParameters.FromCue(block.Cue);
+
+                    // Apply per-block automation envelopes
+                    if (block.Automation?.HasAnyAutomation == true)
+                    {
+                        float normalizedTime = (currentTime - block.StartTime) / block.Duration;
+                        AutomationEvaluator.Apply(block.Automation, normalizedTime, parameters);
+                    }
+
                     parameters.intensity *= track.volume;
 
                     // Apply fade in/out multiplier

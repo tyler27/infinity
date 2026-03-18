@@ -68,7 +68,28 @@ namespace LazerSystem.Preview
                 return;
             }
             _instance = this;
+            AutoDiscoverRenderers();
             ApplyPreviewState();
+        }
+
+        /// <summary>
+        /// Finds Projector1-4 sibling nodes and assigns them if the export array is empty.
+        /// </summary>
+        private void AutoDiscoverRenderers()
+        {
+            var parent = GetParent();
+            if (parent == null) return;
+
+            for (int i = 0; i < _projectorRenderers.Length; i++)
+            {
+                if (_projectorRenderers[i] != null) continue;
+
+                var renderer = parent.GetNodeOrNull<LaserPreviewRenderer>($"Projector{i + 1}");
+                if (renderer != null)
+                {
+                    _projectorRenderers[i] = renderer;
+                }
+            }
         }
 
         public override void _ExitTree()

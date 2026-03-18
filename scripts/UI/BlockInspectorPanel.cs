@@ -1,6 +1,7 @@
 using Godot;
 using LazerSystem.Core;
 using LazerSystem.Patterns;
+using LazerSystem.Timeline;
 using LazerSystem.Timeline.Commands;
 
 namespace LazerSystem.UI
@@ -22,6 +23,12 @@ namespace LazerSystem.UI
         private HSlider fadeOutSlider;
         private SpinBox zoneSpinBox;
         private SpinBox countSpinBox;
+
+        // Automation controls
+        private CheckButton autoKeyToggle;
+        private OptionButton automationParamDropdown;
+        [Export] public TimelineUI timelineUI;
+        [Export] public PlaybackManager playbackManager;
 
         private bool isUpdating;
 
@@ -48,6 +55,12 @@ namespace LazerSystem.UI
                 {
                     CommitPending();
                 }
+            }
+
+            // Update slider readout to show automated value at playhead
+            if (IsAutoKeyActive && currentBlock != null && Visible)
+            {
+                RefreshAutomatedValues();
             }
         }
 
@@ -135,6 +148,20 @@ namespace LazerSystem.UI
             zoneSpinBox = new SpinBox { MinValue = 0, MaxValue = 15, Step = 1 };
             zoneSpinBox.ValueChanged += OnZoneChanged;
             AddChild(zoneSpinBox);
+
+            // Automation section
+            AddChild(new HSeparator());
+            AddChild(new Label { Text = "Automation" });
+
+            autoKeyToggle = new CheckButton { Text = "Auto-Key" };
+            AddChild(autoKeyToggle);
+
+            automationParamDropdown = new OptionButton();
+            automationParamDropdown.AddItem("Color");
+            for (int i = 0; i < AutomatableParameter.All.Length; i++)
+                automationParamDropdown.AddItem(AutomatableParameter.All[i].Name);
+            automationParamDropdown.ItemSelected += OnAutomationParamSelected;
+            AddChild(automationParamDropdown);
         }
 
         private HSlider CreateSlider(string label, float min, float max, float step,
@@ -253,6 +280,11 @@ namespace LazerSystem.UI
         private void OnColorChanged(Color color)
         {
             if (isUpdating || currentBlock?.Cue == null) return;
+
+            // Auto-key: insert keyframes on all 3 color channels
+            if (IsAutoKeyActive && TryAutoKeyColor(color))
+                return;
+
             var oldColor = currentBlock.Cue.Color;
             var blk = currentBlock;
             currentBlock.Cue.Color = color;
@@ -262,11 +294,21 @@ namespace LazerSystem.UI
                 () => blk.Cue.Color = oldColor);
         }
 
+        private bool TryAutoKeyColor(Color color)
+        {
+            bool r = TryAutoKey("ColorR", color.R);
+            bool g = TryAutoKey("ColorG", color.G);
+            bool b = TryAutoKey("ColorB", color.B);
+            return r || g || b;
+        }
+
         private void OnIntensityChanged(double value)
         {
             if (isUpdating || currentBlock?.Cue == null) return;
-            float oldVal = currentBlock.Cue.Intensity;
             float newVal = (float)value;
+            if (TryAutoKey("Intensity", newVal)) return;
+
+            float oldVal = currentBlock.Cue.Intensity;
             var blk = currentBlock;
             blk.Cue.Intensity = newVal;
 
@@ -278,8 +320,10 @@ namespace LazerSystem.UI
         private void OnSizeChanged(double value)
         {
             if (isUpdating || currentBlock?.Cue == null) return;
-            float oldVal = currentBlock.Cue.Size;
             float newVal = (float)value;
+            if (TryAutoKey("Size", newVal)) return;
+
+            float oldVal = currentBlock.Cue.Size;
             var blk = currentBlock;
             blk.Cue.Size = newVal;
 
@@ -291,8 +335,10 @@ namespace LazerSystem.UI
         private void OnSpeedChanged(double value)
         {
             if (isUpdating || currentBlock?.Cue == null) return;
-            float oldVal = currentBlock.Cue.Speed;
             float newVal = (float)value;
+            if (TryAutoKey("Speed", newVal)) return;
+
+            float oldVal = currentBlock.Cue.Speed;
             var blk = currentBlock;
             blk.Cue.Speed = newVal;
 
@@ -304,8 +350,10 @@ namespace LazerSystem.UI
         private void OnRotationChanged(double value)
         {
             if (isUpdating || currentBlock?.Cue == null) return;
-            float oldVal = currentBlock.Cue.Rotation;
             float newVal = (float)value;
+            if (TryAutoKey("Rotation", newVal)) return;
+
+            float oldVal = currentBlock.Cue.Rotation;
             var blk = currentBlock;
             blk.Cue.Rotation = newVal;
 
@@ -317,8 +365,10 @@ namespace LazerSystem.UI
         private void OnSpreadChanged(double value)
         {
             if (isUpdating || currentBlock?.Cue == null) return;
-            float oldVal = currentBlock.Cue.Spread;
             float newVal = (float)value;
+            if (TryAutoKey("Spread", newVal)) return;
+
+            float oldVal = currentBlock.Cue.Spread;
             var blk = currentBlock;
             blk.Cue.Spread = newVal;
 
@@ -379,6 +429,127 @@ namespace LazerSystem.UI
                 () => blk.ZoneIndex = newVal,
                 () => blk.ZoneIndex = oldVal);
             UndoManager.Instance.ExecuteCommand(cmd);
+        }
+
+        private TimelineUI GetTimelineUI()
+        {
+            if (timelineUI != null) return timelineUI;
+            // Walk up the tree to find TimelineUI if export wasn't wired
+            var parent = GetParent();
+            while (parent != null)
+            {
+                if (parent is TimelineUI tui) return tui;
+                // Check siblings
+                foreach (var child in parent.GetChildren())
+                {
+                    if (child is TimelineUI found)
+                    {
+                        timelineUI = found;
+                        return found;
+                    }
+                }
+                parent = parent.GetParent();
+            }
+            return null;
+        }
+
+        private void OnAutomationParamSelected(long index)
+        {
+            // Index 0 = "Color" composite, then AutomatableParameter.All entries
+            string paramName;
+            if (index == 0)
+                paramName = "Color";
+            else if (index - 1 < AutomatableParameter.All.Length)
+                paramName = AutomatableParameter.All[(int)index - 1].Name;
+            else
+                return;
+
+            var tui = GetTimelineUI();
+            if (tui != null)
+                tui.SetActiveAutomationParam(paramName);
+        }
+
+        // --- Auto-Key Support ---
+
+        private bool IsAutoKeyActive => autoKeyToggle != null && autoKeyToggle.ButtonPressed;
+
+        private bool TryAutoKey(string parameterName, float value)
+        {
+            if (!IsAutoKeyActive || currentBlock == null || playbackManager == null)
+                return false;
+
+            float currentTime = playbackManager.CurrentTime;
+            if (currentTime < currentBlock.StartTime || currentTime > currentBlock.StartTime + currentBlock.Duration)
+                return false;
+
+            float normalizedTime = (currentTime - currentBlock.StartTime) / currentBlock.Duration;
+            normalizedTime = Godot.Mathf.Clamp(normalizedTime, 0f, 1f);
+
+            var paramDef = AutomatableParameter.Find(parameterName);
+            if (paramDef == null) return false;
+
+            if (currentBlock.Automation == null)
+                currentBlock.Automation = new AutomationData();
+
+            var lane = currentBlock.Automation.GetOrCreateLane(
+                parameterName, paramDef.Value.Default, paramDef.Value.Min, paramDef.Value.Max);
+
+            // Check if there's already a keyframe near this time
+            int existing = lane.FindKeyframeNear(normalizedTime, 0.01f);
+            if (existing >= 0)
+            {
+                float oldVal = lane.Keyframes[existing].Value;
+                var cmd = new MoveKeyframeCommand(lane, existing,
+                    lane.Keyframes[existing].Time, oldVal,
+                    normalizedTime, value);
+                UndoManager.Instance.ExecuteCommand(cmd);
+            }
+            else
+            {
+                var kf = new AutomationKeyframe(normalizedTime, value);
+                var cmd = new AddKeyframeCommand(lane, kf);
+                UndoManager.Instance.ExecuteCommand(cmd);
+            }
+
+            return true;
+        }
+
+        public void RefreshAutomatedValues()
+        {
+            if (!IsAutoKeyActive || currentBlock == null || playbackManager == null)
+                return;
+
+            float currentTime = playbackManager.CurrentTime;
+            if (currentTime < currentBlock.StartTime || currentTime > currentBlock.StartTime + currentBlock.Duration)
+                return;
+
+            if (currentBlock.Automation == null || !currentBlock.Automation.HasAnyAutomation)
+                return;
+
+            float normalizedTime = (currentTime - currentBlock.StartTime) / currentBlock.Duration;
+            isUpdating = true;
+
+            var intensityLane = currentBlock.Automation.GetLane("Intensity");
+            if (intensityLane != null && intensityLane.Keyframes.Count > 0)
+                intensitySlider.Value = intensityLane.Evaluate(normalizedTime);
+
+            var sizeLane = currentBlock.Automation.GetLane("Size");
+            if (sizeLane != null && sizeLane.Keyframes.Count > 0)
+                sizeSlider.Value = sizeLane.Evaluate(normalizedTime);
+
+            var speedLane = currentBlock.Automation.GetLane("Speed");
+            if (speedLane != null && speedLane.Keyframes.Count > 0)
+                speedSlider.Value = speedLane.Evaluate(normalizedTime);
+
+            var rotationLane = currentBlock.Automation.GetLane("Rotation");
+            if (rotationLane != null && rotationLane.Keyframes.Count > 0)
+                rotationSlider.Value = rotationLane.Evaluate(normalizedTime);
+
+            var spreadLane = currentBlock.Automation.GetLane("Spread");
+            if (spreadLane != null && spreadLane.Keyframes.Count > 0)
+                spreadSlider.Value = spreadLane.Evaluate(normalizedTime);
+
+            isUpdating = false;
         }
     }
 }

@@ -14,6 +14,7 @@ namespace LazerSystem.Core
 		[Export] public float FadeOutDuration;
 		[Export] public bool Muted;
 		[Export] public bool Locked;
+		[Export] public AutomationData Automation;
 
 		public LaserCueBlock DeepClone()
 		{
@@ -44,7 +45,8 @@ namespace LazerSystem.Core
 				FadeInDuration = FadeInDuration,
 				FadeOutDuration = FadeOutDuration,
 				Muted = Muted,
-				Locked = Locked
+				Locked = Locked,
+				Automation = Automation?.DeepClone()
 			};
 		}
 	}

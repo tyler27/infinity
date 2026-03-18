@@ -1,14 +1,12 @@
-[gd_scene load_steps=24 format=3 uid="uid://xys4mcwdxen5"]
+[gd_scene load_steps=21 format=3 uid="uid://xys4mcwdxen5"]
 
 [ext_resource type="Script" uid="uid://bw68nwq0tvr57" path="res://scripts/Core/LaserSystemManager.cs" id="1"]
 [ext_resource type="Script" uid="uid://et0rcbjdyv7w" path="res://scripts/ArtNet/ArtNetManager.cs" id="2"]
-[ext_resource type="Script" uid="uid://nf8dqvfm4pc3" path="res://scripts/Core/Models/ProjectorConfig.cs" id="2_dp3eg"]
 [ext_resource type="Script" uid="uid://jsdqrxys7nfr" path="res://scripts/Sync/SyncManager.cs" id="3"]
 [ext_resource type="Script" uid="uid://ds5ix5l7gohw3" path="res://scripts/Zones/ZoneManager.cs" id="4"]
 [ext_resource type="Script" uid="uid://bcrxmoektnc84" path="res://scripts/Timeline/PlaybackManager.cs" id="5"]
 [ext_resource type="Script" uid="uid://fh75xx1kwwgm" path="res://scripts/Timeline/CueGridManager.cs" id="6"]
 [ext_resource type="Script" uid="uid://coalqfojrco4p" path="res://scripts/Preview/LaserPreviewRenderer.cs" id="7"]
-[ext_resource type="Script" uid="uid://d0s6gyjdesrps" path="res://scripts/Core/Models/ProjectionZone.cs" id="7_0ld40"]
 [ext_resource type="Script" uid="uid://cyuluglihho5o" path="res://scripts/Preview/LaserPreviewManager.cs" id="8"]
 [ext_resource type="Script" uid="uid://mlpnvsiik8hr" path="res://scripts/LiveEngine.cs" id="live"]
 [ext_resource type="Resource" uid="uid://dhfkxrvy3gjl3" path="res://resources/projectors/fb4_1.tres" id="p1"]
@@ -16,12 +14,11 @@
 [ext_resource type="Resource" path="res://resources/projectors/fb4_3.tres" id="p3"]
 [ext_resource type="Resource" path="res://resources/projectors/fb4_4.tres" id="p4"]
 [ext_resource type="Script" uid="uid://cjl74i8soeuy7" path="res://scripts/UI/MainUI.cs" id="ui"]
+[ext_resource type="Script" uid="uid://wbvooqhe1nc0" path="res://scripts/Preview/VenueGrid.cs" id="venue_grid"]
 [ext_resource type="Resource" path="res://resources/zones/zone_1.tres" id="z1"]
 [ext_resource type="Resource" path="res://resources/zones/zone_2.tres" id="z2"]
 [ext_resource type="Resource" path="res://resources/zones/zone_3.tres" id="z3"]
 [ext_resource type="Resource" path="res://resources/zones/zone_4.tres" id="z4"]
-[ext_resource type="Script" uid="uid://btg7uwgsorslq" path="res://scripts/Preview/ZoneBoundaryDisplay.cs" id="zone_boundary"]
-[ext_resource type="Script" path="res://scripts/Preview/VenueGrid.cs" id="venue_grid"]
 
 [sub_resource type="Environment" id="Environment_1"]
 background_mode = 1
@@ -35,8 +32,8 @@ glow_bloom = 0.3
 
 [node name="LaserSystemManager" type="Node" parent="."]
 script = ExtResource("1")
-projectors = Array[ExtResource("2_dp3eg")]([ExtResource("p1"), ExtResource("p2"), ExtResource("p3"), ExtResource("p4")])
-zones = Array[ExtResource("7_0ld40")]([ExtResource("z1"), ExtResource("z2"), ExtResource("z3"), ExtResource("z4")])
+projectors = [ExtResource("p1"), ExtResource("p2"), ExtResource("p3"), ExtResource("p4")]
+zones = [ExtResource("z1"), ExtResource("z2"), ExtResource("z3"), ExtResource("z4")]
 
 [node name="ArtNetManager" type="Node" parent="."]
 script = ExtResource("2")

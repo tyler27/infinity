@@ -37,8 +37,14 @@ namespace LazerSystem.UI
         [Export] private Button loopToggleButton;
         [Export] private Label loopButtonText;
 
+        [ExportGroup("File")]
+        [Export] private Button saveButton;
+        [Export] private Button loadButton;
+
         private bool isLooping;
         private bool isDraggingSlider;
+        private FileDialog saveDialog;
+        private FileDialog loadDialog;
 
         public override void _Ready()
         {
@@ -46,6 +52,7 @@ namespace LazerSystem.UI
             SetupSyncDropdown();
             SetupBpmField();
             SetupSlider();
+            SetupFileDialogs();
         }
 
         public override void _ExitTree()
@@ -66,6 +73,12 @@ namespace LazerSystem.UI
 
             if (loopToggleButton != null)
                 loopToggleButton.Pressed += OnLoopToggleClicked;
+
+            if (saveButton != null)
+                saveButton.Pressed += OnSaveClicked;
+
+            if (loadButton != null)
+                loadButton.Pressed += OnLoadClicked;
         }
 
         private void RemoveButtonListeners()
@@ -81,6 +94,12 @@ namespace LazerSystem.UI
 
             if (loopToggleButton != null)
                 loopToggleButton.Pressed -= OnLoopToggleClicked;
+
+            if (saveButton != null)
+                saveButton.Pressed -= OnSaveClicked;
+
+            if (loadButton != null)
+                loadButton.Pressed -= OnLoadClicked;
         }
 
         private void SetupSyncDropdown()
@@ -255,6 +274,62 @@ namespace LazerSystem.UI
 
             float targetTime = normalizedPosition * syncManager.Duration;
             syncManager.Seek(targetTime);
+        }
+
+        private void SetupFileDialogs()
+        {
+            saveDialog = new FileDialog
+            {
+                FileMode = FileDialog.FileModeEnum.SaveFile,
+                Title = "Save Show",
+                Access = FileDialog.AccessEnum.Userdata,
+                CurrentDir = "user://shows",
+            };
+            saveDialog.AddFilter("*.tres ; Godot Resource");
+            saveDialog.FileSelected += OnSaveFileSelected;
+            AddChild(saveDialog);
+
+            loadDialog = new FileDialog
+            {
+                FileMode = FileDialog.FileModeEnum.OpenFile,
+                Title = "Load Show",
+                Access = FileDialog.AccessEnum.Userdata,
+                CurrentDir = "user://shows",
+            };
+            loadDialog.AddFilter("*.tres ; Godot Resource");
+            loadDialog.FileSelected += OnLoadFileSelected;
+            AddChild(loadDialog);
+        }
+
+        private void OnSaveClicked()
+        {
+            // Ensure shows directory exists
+            DirAccess.MakeDirAbsolute("user://shows");
+            saveDialog.PopupCentered(new Vector2I(600, 400));
+        }
+
+        private void OnLoadClicked()
+        {
+            loadDialog.PopupCentered(new Vector2I(600, 400));
+        }
+
+        private void OnSaveFileSelected(string path)
+        {
+            if (playbackManager != null)
+                playbackManager.SaveShow(path);
+        }
+
+        private void OnLoadFileSelected(string path)
+        {
+            if (playbackManager != null)
+            {
+                playbackManager.LoadShow(path);
+                // Update BPM display
+                if (bpmInputField != null)
+                    bpmInputField.Text = playbackManager.BPM.ToString("F1");
+                if (bpmDisplayText != null)
+                    bpmDisplayText.Text = $"{playbackManager.BPM:F1} BPM";
+            }
         }
     }
 }

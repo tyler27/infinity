@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using LazerSystem.Core;
 
 namespace LazerSystem.Timeline.Commands
@@ -140,6 +141,32 @@ namespace LazerSystem.Timeline.Commands
         public void Undo()
         {
             _applyOld();
+        }
+    }
+
+    public class CompoundCommand : ITimelineCommand
+    {
+        private readonly string _description;
+        private readonly List<ITimelineCommand> _commands;
+
+        public string Description => _description;
+
+        public CompoundCommand(string description, List<ITimelineCommand> commands)
+        {
+            _description = description;
+            _commands = commands;
+        }
+
+        public void Execute()
+        {
+            foreach (var cmd in _commands)
+                cmd.Execute();
+        }
+
+        public void Undo()
+        {
+            for (int i = _commands.Count - 1; i >= 0; i--)
+                _commands[i].Undo();
         }
     }
 }

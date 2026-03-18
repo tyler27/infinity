@@ -1873,16 +1873,19 @@ public partial class MainUI : CanvasLayer
                 return;
             }
 
-            // Cue trigger keys
-            for (int r = 0; r < KeyMap.Length; r++)
+            // Cue trigger keys — only active in Live view
+            if (_viewMode == ViewMode.Live)
             {
-                for (int c = 0; c < KeyMap[r].Length; c++)
+                for (int r = 0; r < KeyMap.Length; r++)
                 {
-                    if (keyEvent.Keycode == KeyMap[r][c])
+                    for (int c = 0; c < KeyMap[r].Length; c++)
                     {
-                        LiveEngine.Instance.TriggerCue(r, c);
-                        GetViewport().SetInputAsHandled();
-                        return;
+                        if (keyEvent.Keycode == KeyMap[r][c])
+                        {
+                            LiveEngine.Instance.TriggerCue(r, c);
+                            GetViewport().SetInputAsHandled();
+                            return;
+                        }
                     }
                 }
             }

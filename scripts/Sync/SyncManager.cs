@@ -153,15 +153,27 @@ namespace LazerSystem.Sync
             _loopEndTime = 0f;
         }
 
-        /// <summary>Starts playback from the current position.</summary>
+        /// <summary>Starts playback from the current position, or from loop start if a loop region is active.</summary>
         public void Play()
         {
+            // If there's a loop region, restart from loop start
+            if (HasLoopRegion)
+            {
+                _internalTime = _loopStartTime;
+            }
+
             _isRunning = true;
             _internalClockRunning = true;
 
             if (_currentSource == SyncSource.Internal && _audioPlayer != null && _audioPlayer.Stream != null)
             {
-                if (_audioPlayer.StreamPaused)
+                if (HasLoopRegion)
+                {
+                    // Always seek to loop start
+                    _audioPlayer.StreamPaused = false;
+                    _audioPlayer.Seek(_loopStartTime);
+                }
+                else if (_audioPlayer.StreamPaused)
                 {
                     // Resume from paused position
                     _audioPlayer.StreamPaused = false;
