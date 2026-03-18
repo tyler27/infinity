@@ -53,6 +53,8 @@ desktop.ini
 *.so
 *.app
 
+.claude/settings.local.json
+
 # Audio (large files - add specific ones you want to track)
 # audio/*.wav
 # audio/*.mp3
@@ -61,9 +63,6 @@ desktop.ini
 *.tmp
 *.bak
 *.log
-
-# Claude
-.claude/
 
 # Unity activation files
 *.alf
