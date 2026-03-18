@@ -691,7 +691,7 @@ public partial class MainUI : CanvasLayer
 
     private static AudioStreamWav LoadWavFromBytes(byte[] rawBytes)
     {
-        // Minimal WAV parser — expects standard PCM format
+        // WAV parser — supports 8/16/24-bit PCM and 32-bit float
         if (rawBytes == null || rawBytes.Length < 44)
             return null;
 
@@ -703,6 +703,7 @@ public partial class MainUI : CanvasLayer
 
         // Find fmt chunk
         int pos = 12;
+        int audioFormat = 1; // 1 = PCM, 3 = IEEE float
         int channels = 1;
         int sampleRate = 44100;
         int bitsPerSample = 16;
@@ -715,6 +716,7 @@ public partial class MainUI : CanvasLayer
 
             if (chunkId == "fmt ")
             {
+                audioFormat = rawBytes[pos + 8] | (rawBytes[pos + 9] << 8);
                 channels = rawBytes[pos + 10] | (rawBytes[pos + 11] << 8);
                 sampleRate = rawBytes[pos + 12] | (rawBytes[pos + 13] << 8) | (rawBytes[pos + 14] << 16) | (rawBytes[pos + 15] << 24);
                 bitsPerSample = rawBytes[pos + 22] | (rawBytes[pos + 23] << 8);
@@ -734,6 +736,31 @@ public partial class MainUI : CanvasLayer
         if (dataBytes == null)
             return null;
 
+        // Convert non-16-bit formats to 16-bit PCM (AudioStreamWav only supports 8/16-bit)
+        if (audioFormat == 3 && bitsPerSample == 32)
+        {
+            // 32-bit IEEE float → 16-bit PCM
+            dataBytes = ConvertFloat32ToInt16(dataBytes);
+            bitsPerSample = 16;
+        }
+        else if (audioFormat == 1 && bitsPerSample == 24)
+        {
+            // 24-bit PCM → 16-bit PCM
+            dataBytes = Convert24BitTo16Bit(dataBytes);
+            bitsPerSample = 16;
+        }
+        else if (audioFormat == 1 && bitsPerSample == 32)
+        {
+            // 32-bit PCM → 16-bit PCM
+            dataBytes = ConvertInt32ToInt16(dataBytes);
+            bitsPerSample = 16;
+        }
+        else if (audioFormat != 1 || (bitsPerSample != 8 && bitsPerSample != 16))
+        {
+            GD.PrintErr($"[MainUI] Unsupported WAV format: audioFormat={audioFormat}, bitsPerSample={bitsPerSample}");
+            return null;
+        }
+
         var wav = new AudioStreamWav();
         wav.Data = dataBytes;
         wav.Format = bitsPerSample == 8 ? AudioStreamWav.FormatEnum.Format8Bits : AudioStreamWav.FormatEnum.Format16Bits;
@@ -742,6 +769,47 @@ public partial class MainUI : CanvasLayer
         wav.LoopMode = AudioStreamWav.LoopModeEnum.Disabled;
 
         return wav;
+    }
+
+    private static byte[] ConvertFloat32ToInt16(byte[] floatData)
+    {
+        int sampleCount = floatData.Length / 4;
+        byte[] result = new byte[sampleCount * 2];
+        for (int i = 0; i < sampleCount; i++)
+        {
+            float sample = System.BitConverter.ToSingle(floatData, i * 4);
+            sample = Mathf.Clamp(sample, -1f, 1f);
+            short s16 = (short)(sample * 32767f);
+            result[i * 2] = (byte)(s16 & 0xFF);
+            result[i * 2 + 1] = (byte)((s16 >> 8) & 0xFF);
+        }
+        return result;
+    }
+
+    private static byte[] Convert24BitTo16Bit(byte[] data24)
+    {
+        int sampleCount = data24.Length / 3;
+        byte[] result = new byte[sampleCount * 2];
+        for (int i = 0; i < sampleCount; i++)
+        {
+            // 24-bit signed: take the upper 16 bits (bytes [1] and [2] of each 3-byte sample)
+            result[i * 2] = data24[i * 3 + 1];
+            result[i * 2 + 1] = data24[i * 3 + 2];
+        }
+        return result;
+    }
+
+    private static byte[] ConvertInt32ToInt16(byte[] data32)
+    {
+        int sampleCount = data32.Length / 4;
+        byte[] result = new byte[sampleCount * 2];
+        for (int i = 0; i < sampleCount; i++)
+        {
+            // 32-bit signed PCM: take upper 16 bits
+            result[i * 2] = data32[i * 4 + 2];
+            result[i * 2 + 1] = data32[i * 4 + 3];
+        }
+        return result;
     }
 
     private AudioStreamPlayer FindAudioPlayer()
