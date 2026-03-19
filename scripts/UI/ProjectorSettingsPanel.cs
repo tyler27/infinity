@@ -21,8 +21,6 @@ public partial class ProjectorSettingsPanel : FloatingPanel
 
     // Network controls
     private LineEdit _broadcastEdit;
-    private HSlider _sendRateSlider;
-    private Label _sendRateLabel;
     private Label _discoveredLabel;
     private ItemList _nodeList;
 
@@ -86,35 +84,15 @@ public partial class ProjectorSettingsPanel : FloatingPanel
         scanBtn.Pressed += OnScanNetwork;
         bcastRow.AddChild(scanBtn);
 
-        // Send rate row
-        var rateRow = new HBoxContainer();
-        rateRow.AddThemeConstantOverride("separation", 6);
-        _contentVBox.AddChild(rateRow);
-
-        rateRow.AddChild(MakeLabel("Send Rate", 80));
-
-        _sendRateSlider = new HSlider();
-        _sendRateSlider.MinValue = 1;
-        _sendRateSlider.MaxValue = 44;
-        _sendRateSlider.Value = 44;
-        _sendRateSlider.Step = 1;
-        _sendRateSlider.CustomMinimumSize = new Vector2(200, 20);
-        _sendRateSlider.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        _sendRateSlider.ValueChanged += OnSendRateChanged;
-        rateRow.AddChild(_sendRateSlider);
-
-        _sendRateLabel = MakeLabel("44 Hz", 50);
-        rateRow.AddChild(_sendRateLabel);
-
         // Discovered label
         _discoveredLabel = MakeLabel("Discovered: 0 devices", 0);
-        _discoveredLabel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        _discoveredLabel.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         _contentVBox.AddChild(_discoveredLabel);
 
         // Node list
         _nodeList = new ItemList();
         _nodeList.CustomMinimumSize = new Vector2(0, 80);
-        _nodeList.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        _nodeList.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         _nodeList.AddThemeColorOverride("font_color", new Color(0.8f, 0.9f, 0.85f, 1f));
         var nodeListStyle = new StyleBoxFlat();
         nodeListStyle.BgColor = FieldBg;
@@ -154,7 +132,7 @@ public partial class ProjectorSettingsPanel : FloatingPanel
     private void BuildProjectorSection(int i)
     {
         var panel = new PanelContainer();
-        panel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        panel.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         var panelStyle = new StyleBoxFlat();
         panelStyle.BgColor = SectionBg;
         panelStyle.SetCornerRadiusAll(4);
@@ -242,21 +220,13 @@ public partial class ProjectorSettingsPanel : FloatingPanel
 
         // Row 4: Zone assignment label
         _zoneLabels[i] = MakeLabel("Zones: --", 0);
-        _zoneLabels[i].SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        _zoneLabels[i].SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         _zoneLabels[i].AddThemeColorOverride("font_color", DimText);
         _zoneLabels[i].AddThemeFontSizeOverride("font_size", 11);
         vbox.AddChild(_zoneLabels[i]);
     }
 
     // ── Event Handlers ──
-
-    private void OnSendRateChanged(double value)
-    {
-        int rate = (int)value;
-        _sendRateLabel.Text = $"{rate} Hz";
-        if (ArtNetManager.Instance != null)
-            ArtNetManager.Instance.SendRate = rate;
-    }
 
     private void OnScanNetwork()
     {
@@ -420,8 +390,6 @@ public partial class ProjectorSettingsPanel : FloatingPanel
         if (ArtNetManager.Instance != null)
         {
             _broadcastEdit.Text = ArtNetManager.Instance.BroadcastAddress;
-            _sendRateSlider.Value = ArtNetManager.Instance.SendRate;
-            _sendRateLabel.Text = $"{(int)ArtNetManager.Instance.SendRate} Hz";
             RefreshDiscoveredList();
         }
 
@@ -497,7 +465,7 @@ public partial class ProjectorSettingsPanel : FloatingPanel
         var edit = new LineEdit();
         edit.Text = defaultText;
         edit.CustomMinimumSize = new Vector2(minWidth, 28);
-        edit.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        edit.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
         edit.AddThemeColorOverride("font_color", new Color(0.85f, 0.9f, 0.85f, 1f));
         edit.AddThemeFontSizeOverride("font_size", 12);
         var editStyle = new StyleBoxFlat();

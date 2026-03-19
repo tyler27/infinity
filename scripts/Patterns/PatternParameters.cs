@@ -18,6 +18,7 @@ namespace LazerSystem.Patterns
         public float amplitude = 0.5f;
         public Vector2 position = Vector2.Zero;
         public string text = "";
+        public LazerSystem.Core.CustomPointPattern customPattern;
 
         public PatternParameters() { }
 

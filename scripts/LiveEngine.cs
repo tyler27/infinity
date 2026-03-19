@@ -99,6 +99,9 @@ public partial class LiveEngine : Node
 	// Accumulate points per projector per frame so multiple cues can layer
 	private List<LaserPoint>[] _projectorPoints;
 
+	// Custom pattern cache (path → loaded resource)
+	private Dictionary<string, LazerSystem.Core.CustomPointPattern> _customPatternCache = new();
+
 	// Pre-allocated buffers to eliminate per-frame allocations
 	private PatternParameters _cueParams;
 	private PatternParameters _finalParams;
@@ -240,6 +243,20 @@ public partial class LiveEngine : Node
 
 				// Build pattern parameters from cue (no allocation)
 				_cueParams.CopyFromCue(cue);
+
+				// Load custom point pattern if needed
+				_cueParams.customPattern = null;
+				if (cue.PatternType == LazerSystem.Core.LaserPatternType.CustomILDA
+					&& !string.IsNullOrEmpty(cue.IldaAssetPath))
+				{
+					if (!_customPatternCache.TryGetValue(cue.IldaAssetPath, out var cached))
+					{
+						cached = GD.Load<LazerSystem.Core.CustomPointPattern>(cue.IldaAssetPath);
+						if (cached != null)
+							_customPatternCache[cue.IldaAssetPath] = cached;
+					}
+					_cueParams.customPattern = cached;
+				}
 
 				// Apply overrides (no allocation)
 				ApplyOverrides(_cueParams, _finalParams);
@@ -469,6 +486,7 @@ public partial class LiveEngine : Node
 		result.frequency = cueParams.frequency;
 		result.amplitude = cueParams.amplitude;
 		result.position = finalPosition;
+		result.customPattern = cueParams.customPattern;
 	}
 
 	// --------------- DMX Stats Accumulation ---------------

@@ -41,16 +41,23 @@ public partial class MainUI : CanvasLayer
 	// Toolbar
 	private Button _laserOutputBtn;
 	private Button _blackoutBtn;
-	private Button[] _projectorBtns = new Button[4];
+	private MenuButton _projectorMenuBtn;
+	private PopupMenu _projectorPopup;
 	private Label _fpsLabel;
 
-	// Zone routing buttons
-	private Button[] _zoneBtns = new Button[4];
-	private Button _zoneAllBtn;
+	// Zone routing
+	private MenuButton _zoneMenuBtn;
+	private PopupMenu _zonePopup;
 
 	// Settings panels
 	private FloatingPanel _projectorSettingsPanel;
 	private FloatingPanel _zoneEditorPanel;
+	private FloatingPanel _appSettingsPanel;
+	private FloatingPanel _patternEditorPanel;
+
+	// Toolbar menu
+	private Button _menuButton;
+	private PopupMenu _toolbarMenu;
 
 	// Live control
 	private HSlider _masterIntensitySlider;
@@ -147,40 +154,39 @@ public partial class MainUI : CanvasLayer
 
 		toolbar.AddChild(CreateToolbarSeparator());
 
-		// P1-P4
-		for (int i = 0; i < 4; i++)
-		{
-			int idx = i;
-			var pBtn = CreateStyledButton($"P{i + 1}", new Vector2(40, 34), ProjectorColors[i]);
-			pBtn.Pressed += () =>
-			{
-				LiveEngine.Instance.ProjectorEnabled[idx] = !LiveEngine.Instance.ProjectorEnabled[idx];
-			};
-			_projectorBtns[i] = pBtn;
-			toolbar.AddChild(pBtn);
-		}
+		// Projector dropdown
+		_projectorMenuBtn = new MenuButton();
+		_projectorMenuBtn.Text = "PROJ: ALL";
+		_projectorMenuBtn.CustomMinimumSize = new Vector2(110, 34);
+		_projectorMenuBtn.Flat = false;
+		StyleButton(_projectorMenuBtn, new Color(0.2f, 0.5f, 0.3f, 1f));
+		_projectorMenuBtn.AddThemeColorOverride("font_color", Colors.White);
+		_projectorMenuBtn.AddThemeColorOverride("font_hover_color", Colors.White);
+		_projectorMenuBtn.AddThemeColorOverride("font_pressed_color", Colors.White);
+		toolbar.AddChild(_projectorMenuBtn);
+
+		_projectorPopup = _projectorMenuBtn.GetPopup();
+		RebuildProjectorMenu();
+		_projectorPopup.IdPressed += OnProjectorMenuItemPressed;
+		_projectorPopup.HideOnCheckableItemSelection = false;
 
 		toolbar.AddChild(CreateToolbarSeparator());
 
-		// Zone routing buttons
-		var zoneLabel = new Label();
-		zoneLabel.Text = "ZONE:";
-		zoneLabel.AddThemeColorOverride("font_color", TextColor);
-		zoneLabel.AddThemeFontSizeOverride("font_size", 11);
-		toolbar.AddChild(zoneLabel);
+		// Zone routing dropdown
+		_zoneMenuBtn = new MenuButton();
+		_zoneMenuBtn.Text = "ZONES: ALL";
+		_zoneMenuBtn.CustomMinimumSize = new Vector2(120, 34);
+		_zoneMenuBtn.Flat = false;
+		StyleButton(_zoneMenuBtn, ActiveGreen);
+		_zoneMenuBtn.AddThemeColorOverride("font_color", Colors.White);
+		_zoneMenuBtn.AddThemeColorOverride("font_hover_color", Colors.White);
+		_zoneMenuBtn.AddThemeColorOverride("font_pressed_color", Colors.White);
+		toolbar.AddChild(_zoneMenuBtn);
 
-		for (int i = 0; i < 4; i++)
-		{
-			int idx = i;
-			var zBtn = CreateStyledButton($"Z{i + 1}", new Vector2(36, 34), ActiveGreen);
-			zBtn.Pressed += () => ToggleZone(idx);
-			_zoneBtns[i] = zBtn;
-			toolbar.AddChild(zBtn);
-		}
-
-		_zoneAllBtn = CreateStyledButton("ALL", new Vector2(44, 34), ActiveGreen);
-		_zoneAllBtn.Pressed += () => { LiveEngine.Instance.ActiveZones = new int[] { 0, 1, 2, 3 }; };
-		toolbar.AddChild(_zoneAllBtn);
+		_zonePopup = _zoneMenuBtn.GetPopup();
+		RebuildZoneMenu();
+		_zonePopup.IdPressed += OnZoneMenuItemPressed;
+		_zonePopup.HideOnCheckableItemSelection = false;
 
 		toolbar.AddChild(CreateToolbarSeparator());
 
@@ -195,14 +201,19 @@ public partial class MainUI : CanvasLayer
 
 		toolbar.AddChild(CreateToolbarSeparator());
 
-		// Settings panel buttons
-		var projSettingsBtn = CreateStyledButton("Projectors", new Vector2(85, 34), new Color(0.2f, 0.3f, 0.5f, 1f));
-		projSettingsBtn.Pressed += ToggleProjectorSettings;
-		toolbar.AddChild(projSettingsBtn);
+		// Menu button (replaces individual Projectors / Zones / Settings buttons)
+		var menuBtn = CreateStyledButton("\u2630", new Vector2(36, 34), new Color(0.2f, 0.3f, 0.5f, 1f));
+		menuBtn.Pressed += OnMenuButtonPressed;
+		toolbar.AddChild(menuBtn);
+		_menuButton = menuBtn;
 
-		var zoneEditorBtn = CreateStyledButton("Zones", new Vector2(55, 34), new Color(0.2f, 0.3f, 0.5f, 1f));
-		zoneEditorBtn.Pressed += ToggleZoneEditor;
-		toolbar.AddChild(zoneEditorBtn);
+		_toolbarMenu = new PopupMenu();
+		_toolbarMenu.AddItem("Projectors", 0);
+		_toolbarMenu.AddItem("Zones", 1);
+		_toolbarMenu.AddItem("Settings", 2);
+		_toolbarMenu.AddItem("Pattern Editor", 3);
+		_toolbarMenu.IdPressed += OnToolbarMenuSelected;
+		AddChild(_toolbarMenu);
 
 		var spacer = new Control();
 		spacer.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
@@ -2034,21 +2045,10 @@ public partial class MainUI : CanvasLayer
 		_blackoutBtn.AddThemeColorOverride("font_color", blackout ? Colors.Black : Colors.White);
 
 		// Projector buttons
-		for (int i = 0; i < 4; i++)
-		{
-			bool en = LiveEngine.Instance.ProjectorEnabled[i];
-			StyleButton(_projectorBtns[i], en ? ProjectorColors[i] : ProjectorColors[i].Darkened(0.6f));
-			_projectorBtns[i].AddThemeColorOverride("font_color", en ? Colors.White : DimText);
-		}
+		UpdateProjectorMenuLabel();
 
-		// Zone routing buttons
-		var activeZones = LiveEngine.Instance.ActiveZones;
-		for (int i = 0; i < 4; i++)
-		{
-			bool active = System.Array.IndexOf(activeZones, i) >= 0;
-			StyleButton(_zoneBtns[i], active ? ActiveGreen : new Color(0.25f, 0.25f, 0.3f, 1f));
-			_zoneBtns[i].AddThemeColorOverride("font_color", active ? Colors.White : DimText);
-		}
+		// Zone routing dropdown
+		UpdateZoneMenuLabel();
 	}
 
 	private void UpdateStatusBar()
@@ -2124,16 +2124,175 @@ public partial class MainUI : CanvasLayer
 	// ═══════════════════════════════════════════════
 	//  ZONE / SETTINGS TOGGLES
 	// ═══════════════════════════════════════════════
-	private void ToggleZone(int zoneIndex)
+	private void RebuildProjectorMenu()
 	{
-		var current = new System.Collections.Generic.List<int>(LiveEngine.Instance.ActiveZones);
-		if (current.Contains(zoneIndex))
-			current.Remove(zoneIndex);
+		_projectorPopup.Clear();
+
+		var mgr = LaserSystemManager.Instance;
+		int count = mgr?.Projectors != null ? mgr.Projectors.Count : 4;
+
+		for (int i = 0; i < count; i++)
+		{
+			string name = $"Projector {i + 1}";
+			if (mgr?.Projectors != null && i < mgr.Projectors.Count && mgr.Projectors[i] != null)
+			{
+				var projName = mgr.Projectors[i].ProjectorName;
+				if (!string.IsNullOrEmpty(projName))
+					name = projName;
+			}
+			_projectorPopup.AddCheckItem(name, i);
+			_projectorPopup.SetItemChecked(i, LiveEngine.Instance.ProjectorEnabled[i]);
+		}
+
+		_projectorPopup.AddSeparator();
+		_projectorPopup.AddItem("Enable All", 1000);
+		_projectorPopup.AddItem("Disable All", 1001);
+	}
+
+	private void OnProjectorMenuItemPressed(long id)
+	{
+		if (id == 1000)
+		{
+			for (int i = 0; i < LiveEngine.Instance.ProjectorEnabled.Length; i++)
+				LiveEngine.Instance.ProjectorEnabled[i] = true;
+		}
+		else if (id == 1001)
+		{
+			for (int i = 0; i < LiveEngine.Instance.ProjectorEnabled.Length; i++)
+				LiveEngine.Instance.ProjectorEnabled[i] = false;
+		}
 		else
-			current.Add(zoneIndex);
-		if (current.Count == 0)
-			current.Add(zoneIndex); // don't allow empty
-		LiveEngine.Instance.ActiveZones = current.ToArray();
+		{
+			int idx = (int)id;
+			LiveEngine.Instance.ProjectorEnabled[idx] = !LiveEngine.Instance.ProjectorEnabled[idx];
+		}
+
+		// Update check marks
+		for (int i = 0; i < _projectorPopup.ItemCount; i++)
+		{
+			if (_projectorPopup.IsItemCheckable(i))
+			{
+				int itemId = _projectorPopup.GetItemId(i);
+				_projectorPopup.SetItemChecked(i, LiveEngine.Instance.ProjectorEnabled[itemId]);
+			}
+		}
+
+		UpdateProjectorMenuLabel();
+	}
+
+	private void UpdateProjectorMenuLabel()
+	{
+		int total = LiveEngine.Instance.ProjectorEnabled.Length;
+		int enabled = 0;
+		for (int i = 0; i < total; i++)
+			if (LiveEngine.Instance.ProjectorEnabled[i]) enabled++;
+
+		if (enabled == total)
+			_projectorMenuBtn.Text = "PROJ: ALL";
+		else if (enabled == 0)
+			_projectorMenuBtn.Text = "PROJ: NONE";
+		else
+			_projectorMenuBtn.Text = $"PROJ: {enabled}/{total}";
+	}
+
+	private void RebuildZoneMenu()
+	{
+		_zonePopup.Clear();
+
+		var mgr = LaserSystemManager.Instance;
+		int zoneCount = mgr?.Zones != null ? mgr.Zones.Count : 4;
+
+		for (int i = 0; i < zoneCount; i++)
+		{
+			string name = $"Zone {i + 1}";
+			if (mgr?.Zones != null && i < mgr.Zones.Count && mgr.Zones[i] != null)
+			{
+				var zone = mgr.Zones[i];
+				var zoneName = zone.Get("ZoneName").AsString();
+				if (!string.IsNullOrEmpty(zoneName))
+					name = zoneName;
+			}
+			_zonePopup.AddCheckItem(name, i);
+			_zonePopup.SetItemChecked(i, System.Array.IndexOf(LiveEngine.Instance.ActiveZones, i) >= 0);
+		}
+
+		_zonePopup.AddSeparator();
+		_zonePopup.AddItem("Select All", 1000);
+		_zonePopup.AddItem("Select None", 1001);
+	}
+
+	private void OnZoneMenuItemPressed(long id)
+	{
+		if (id == 1000)
+		{
+			// Select All
+			var mgr = LaserSystemManager.Instance;
+			int count = mgr?.Zones != null ? mgr.Zones.Count : 4;
+			var all = new int[count];
+			for (int i = 0; i < count; i++) all[i] = i;
+			LiveEngine.Instance.ActiveZones = all;
+		}
+		else if (id == 1001)
+		{
+			// Select None — keep at least zone 0
+			LiveEngine.Instance.ActiveZones = new int[] { 0 };
+		}
+		else
+		{
+			int zoneIndex = (int)id;
+			var current = new System.Collections.Generic.List<int>(LiveEngine.Instance.ActiveZones);
+			if (current.Contains(zoneIndex))
+				current.Remove(zoneIndex);
+			else
+				current.Add(zoneIndex);
+			if (current.Count == 0)
+				current.Add(zoneIndex);
+			LiveEngine.Instance.ActiveZones = current.ToArray();
+		}
+
+		// Update check marks
+		for (int i = 0; i < _zonePopup.ItemCount; i++)
+		{
+			if (_zonePopup.IsItemCheckable(i))
+			{
+				int itemId = _zonePopup.GetItemId(i);
+				_zonePopup.SetItemChecked(i, System.Array.IndexOf(LiveEngine.Instance.ActiveZones, itemId) >= 0);
+			}
+		}
+
+		UpdateZoneMenuLabel();
+	}
+
+	private void UpdateZoneMenuLabel()
+	{
+		var zones = LiveEngine.Instance.ActiveZones;
+		var mgr = LaserSystemManager.Instance;
+		int totalZones = mgr?.Zones != null ? mgr.Zones.Count : 4;
+
+		if (zones.Length >= totalZones)
+			_zoneMenuBtn.Text = "ZONES: ALL";
+		else if (zones.Length == 1)
+			_zoneMenuBtn.Text = $"ZONES: Z{zones[0] + 1}";
+		else
+			_zoneMenuBtn.Text = $"ZONES: {zones.Length}/{totalZones}";
+	}
+
+	private void OnMenuButtonPressed()
+	{
+		var btnRect = _menuButton.GetGlobalRect();
+		_toolbarMenu.Position = new Vector2I((int)btnRect.Position.X, (int)(btnRect.Position.Y + btnRect.Size.Y));
+		_toolbarMenu.Popup();
+	}
+
+	private void OnToolbarMenuSelected(long id)
+	{
+		switch (id)
+		{
+			case 0: ToggleProjectorSettings(); break;
+			case 1: ToggleZoneEditor(); break;
+			case 2: ToggleAppSettings(); break;
+			case 3: TogglePatternEditor(); break;
+		}
 	}
 
 	private void ToggleProjectorSettings()
@@ -2166,6 +2325,36 @@ public partial class MainUI : CanvasLayer
 		AddChild(_zoneEditorPanel);
 	}
 
+	private void ToggleAppSettings()
+	{
+		if (_appSettingsPanel != null)
+		{
+			_appSettingsPanel.QueueFree();
+			_appSettingsPanel = null;
+			return;
+		}
+		_appSettingsPanel = new AppSettingsPanel();
+		_appSettingsPanel.Position = new Vector2(200, 80);
+		_appSettingsPanel.Size = new Vector2(460, 340);
+		_appSettingsPanel.OnCloseRequested += ToggleAppSettings;
+		AddChild(_appSettingsPanel);
+	}
+
+	private void TogglePatternEditor()
+	{
+		if (_patternEditorPanel != null)
+		{
+			_patternEditorPanel.QueueFree();
+			_patternEditorPanel = null;
+			return;
+		}
+		_patternEditorPanel = new PatternEditorPanel();
+		_patternEditorPanel.Position = new Vector2(120, 40);
+		_patternEditorPanel.Size = new Vector2(340, 700);
+		_patternEditorPanel.OnCloseRequested += TogglePatternEditor;
+		AddChild(_patternEditorPanel);
+	}
+
 	// ═══════════════════════════════════════════════
 	//  HELPERS
 	// ═══════════════════════════════════════════════
@@ -2184,6 +2373,7 @@ public partial class MainUI : CanvasLayer
 			LaserPatternType.Star     => "*",
 			LaserPatternType.Text     => "T",
 			LaserPatternType.Tunnel   => "@",
+			LaserPatternType.QuestionBlock => "?!",
 			_ => "?"
 		};
 	}

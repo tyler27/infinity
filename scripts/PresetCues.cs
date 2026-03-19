@@ -179,17 +179,17 @@ public static class PresetCues
         engine.SetCue(1, 4, 8, MakeCue("Slow Square", LaserPatternType.Square, Colors.Green, size: 0.6f, speed: 0.3f));
         engine.SetCue(1, 4, 9, MakeCue("Slow Star", LaserPatternType.Star, Colors.Blue, size: 0.6f, count: 6, speed: 0.3f));
 
-        // Row 5: Large shapes & high intensity
-        engine.SetCue(1, 5, 0, MakeCue("XL Circle", LaserPatternType.Circle, Colors.Red, size: 0.9f, intensity: 1f));
-        engine.SetCue(1, 5, 1, MakeCue("XL Triangle", LaserPatternType.Triangle, Colors.Green, size: 0.9f, intensity: 1f));
-        engine.SetCue(1, 5, 2, MakeCue("XL Square", LaserPatternType.Square, Colors.Blue, size: 0.9f, intensity: 1f));
-        engine.SetCue(1, 5, 3, MakeCue("XL Star 5", LaserPatternType.Star, Colors.Cyan, size: 0.9f, count: 5));
-        engine.SetCue(1, 5, 4, MakeCue("XL Star 8", LaserPatternType.Star, Colors.Yellow, size: 0.9f, count: 8));
-        engine.SetCue(1, 5, 5, MakeCue("XS Circle", LaserPatternType.Circle, Colors.Magenta, size: 0.15f));
-        engine.SetCue(1, 5, 6, MakeCue("XS Triangle", LaserPatternType.Triangle, Colors.White, size: 0.15f));
-        engine.SetCue(1, 5, 7, MakeCue("XS Square", LaserPatternType.Square, Colors.Red, size: 0.15f));
-        engine.SetCue(1, 5, 8, MakeCue("XS Star", LaserPatternType.Star, Colors.Green, size: 0.15f, count: 5));
-        engine.SetCue(1, 5, 9, MakeCue("Hyper Star", LaserPatternType.Star, Colors.White, size: 0.5f, count: 12, speed: 6f));
+        // Row 5: Question Blocks
+        engine.SetCue(1, 5, 0, MakeCue("? Block", LaserPatternType.QuestionBlock, Colors.Yellow, size: 0.5f, speed: 0f));
+        engine.SetCue(1, 5, 1, MakeCue("? Block Spin", LaserPatternType.QuestionBlock, Colors.Yellow, size: 0.5f, speed: 1f));
+        engine.SetCue(1, 5, 2, MakeCue("? Block Fast", LaserPatternType.QuestionBlock, Colors.Yellow, size: 0.5f, speed: 3f));
+        engine.SetCue(1, 5, 3, MakeCue("? Block Big", LaserPatternType.QuestionBlock, Colors.Yellow, size: 0.8f, speed: 0f));
+        engine.SetCue(1, 5, 4, MakeCue("? Block Small", LaserPatternType.QuestionBlock, Colors.Yellow, size: 0.3f, speed: 0f));
+        engine.SetCue(1, 5, 5, MakeCue("? Block Red", LaserPatternType.QuestionBlock, Colors.Red, size: 0.5f, speed: 0f));
+        engine.SetCue(1, 5, 6, MakeCue("? Block Green", LaserPatternType.QuestionBlock, Colors.Green, size: 0.5f, speed: 0f));
+        engine.SetCue(1, 5, 7, MakeCue("? Block Blue", LaserPatternType.QuestionBlock, Colors.Blue, size: 0.5f, speed: 0f));
+        engine.SetCue(1, 5, 8, MakeCue("? Block Cyan", LaserPatternType.QuestionBlock, Colors.Cyan, size: 0.5f, speed: 1.5f));
+        engine.SetCue(1, 5, 9, MakeCue("? Block White", LaserPatternType.QuestionBlock, Colors.White, size: 0.6f, speed: 2f));
     }
 
     // =========================================================================

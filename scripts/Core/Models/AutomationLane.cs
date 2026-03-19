@@ -25,8 +25,8 @@ namespace LazerSystem.Core
 				return Keyframes[0].Value;
 
 			// After last keyframe
-			if (normalizedTime >= Keyframes[Keyframes.Count - 1].Time)
-				return Keyframes[Keyframes.Count - 1].Value;
+			if (normalizedTime >= Keyframes[^1].Time)
+				return Keyframes[^1].Value;
 
 			// Binary search for the segment
 			int left = 0;

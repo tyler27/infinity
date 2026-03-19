@@ -1,5 +1,6 @@
 using Godot;
 using Godot.Collections;
+using LazerSystem.ArtNet;
 
 namespace LazerSystem.Core
 {
@@ -15,6 +16,8 @@ namespace LazerSystem.Core
 
 		private bool _isPlaying;
 		private float _currentTime;
+
+		public AppSettings Settings { get; private set; }
 
 		public Array<ProjectorConfig> Projectors => projectors;
 		public Array<ProjectionZone> Zones => zones;
@@ -38,6 +41,9 @@ namespace LazerSystem.Core
 			}
 			Instance = this;
 			ValidateSetup();
+
+			Settings = AppSettings.LoadOrCreate();
+			CallDeferred(nameof(ApplySettings));
 		}
 
 		public override void _ExitTree()
@@ -46,6 +52,30 @@ namespace LazerSystem.Core
 			{
 				Instance = null;
 			}
+		}
+
+		public void ApplySettings()
+		{
+			if (Settings == null) return;
+
+			Engine.MaxFps = Settings.FpsCap;
+			DisplayServer.WindowSetVsyncMode(
+				Settings.VSync ? DisplayServer.VSyncMode.Enabled : DisplayServer.VSyncMode.Disabled
+			);
+
+			if (ArtNetManager.Instance != null)
+				ArtNetManager.Instance.SendRate = Settings.ArtNetSendRate;
+
+			if (LiveEngine.Instance != null)
+			{
+				if (Settings.BlackoutOnLaunch)
+					LiveEngine.Instance.Blackout = true;
+			}
+		}
+
+		public void SaveSettings()
+		{
+			Settings?.Save();
 		}
 
 		/// <summary>Validates that the manager has a reasonable configuration.</summary>

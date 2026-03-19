@@ -22,6 +22,8 @@ namespace LazerSystem.Patterns
                 { LaserPatternType.Star, new ShapePattern(isStar: true) },
                 { LaserPatternType.Text, new TextPattern() },
                 { LaserPatternType.Tunnel, new TunnelPattern() },
+                { LaserPatternType.QuestionBlock, new QuestionBlockPattern() },
+                { LaserPatternType.CustomILDA, new CustomPointPatternGen() },
             };
 
         /// <summary>

@@ -1,12 +1,14 @@
-[gd_scene load_steps=21 format=3 uid="uid://xys4mcwdxen5"]
+[gd_scene load_steps=23 format=3 uid="uid://xys4mcwdxen5"]
 
 [ext_resource type="Script" uid="uid://bw68nwq0tvr57" path="res://scripts/Core/LaserSystemManager.cs" id="1"]
 [ext_resource type="Script" uid="uid://et0rcbjdyv7w" path="res://scripts/ArtNet/ArtNetManager.cs" id="2"]
+[ext_resource type="Script" uid="uid://nf8dqvfm4pc3" path="res://scripts/Core/Models/ProjectorConfig.cs" id="2_yc10j"]
 [ext_resource type="Script" uid="uid://jsdqrxys7nfr" path="res://scripts/Sync/SyncManager.cs" id="3"]
 [ext_resource type="Script" uid="uid://ds5ix5l7gohw3" path="res://scripts/Zones/ZoneManager.cs" id="4"]
 [ext_resource type="Script" uid="uid://bcrxmoektnc84" path="res://scripts/Timeline/PlaybackManager.cs" id="5"]
 [ext_resource type="Script" uid="uid://fh75xx1kwwgm" path="res://scripts/Timeline/CueGridManager.cs" id="6"]
 [ext_resource type="Script" uid="uid://coalqfojrco4p" path="res://scripts/Preview/LaserPreviewRenderer.cs" id="7"]
+[ext_resource type="Script" uid="uid://d0s6gyjdesrps" path="res://scripts/Core/Models/ProjectionZone.cs" id="7_jscy8"]
 [ext_resource type="Script" uid="uid://cyuluglihho5o" path="res://scripts/Preview/LaserPreviewManager.cs" id="8"]
 [ext_resource type="Script" uid="uid://mlpnvsiik8hr" path="res://scripts/LiveEngine.cs" id="live"]
 [ext_resource type="Resource" uid="uid://dhfkxrvy3gjl3" path="res://resources/projectors/fb4_1.tres" id="p1"]
@@ -32,8 +34,8 @@ glow_bloom = 0.3
 
 [node name="LaserSystemManager" type="Node" parent="."]
 script = ExtResource("1")
-projectors = [ExtResource("p1"), ExtResource("p2"), ExtResource("p3"), ExtResource("p4")]
-zones = [ExtResource("z1"), ExtResource("z2"), ExtResource("z3"), ExtResource("z4")]
+projectors = Array[ExtResource("2_yc10j")]([ExtResource("p1"), ExtResource("p2"), ExtResource("p3"), ExtResource("p4")])
+zones = Array[ExtResource("7_jscy8")]([ExtResource("z1"), ExtResource("z2"), ExtResource("z3"), ExtResource("z4")])
 
 [node name="ArtNetManager" type="Node" parent="."]
 script = ExtResource("2")

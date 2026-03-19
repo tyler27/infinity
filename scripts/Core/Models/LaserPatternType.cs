@@ -13,6 +13,7 @@ namespace LazerSystem.Core
         Star,
         Text,
         Tunnel,
+        QuestionBlock,
         CustomILDA
     }
 }
